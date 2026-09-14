@@ -15,7 +15,8 @@ describe("reflection_meta / reflectionEntries", () => {
       "human-reflection",
       "faq甲",
       "human-reflection:qq:100:5",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "100", "问X", "答Y")
     const e = repo.reflectionEntries().find((r) => r.id === id)!
@@ -34,7 +35,8 @@ describe("reflection_meta / reflectionEntries", () => {
       "human-reflection",
       "无源",
       "human-reflection:qq:100:5",
-      vec()
+      vec(),
+      "default"
     )
     expect(repo.reflectionEntries().find((r) => r.id === id)).toMatchObject({
       question: null,
@@ -48,7 +50,8 @@ describe("reflection_meta / reflectionEntries", () => {
       "human-reflection",
       "faq",
       "human-reflection:qq:100:5",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "100", "q", "a")
     expect(repo.setReflectionStatus(id, "rejected")).toBe(true)
@@ -70,7 +73,8 @@ describe("reflection_meta / reflectionEntries", () => {
     const id = repo.insertKbChunk(
       "human-reflection",
       "旧无 meta",
-      "human-reflection:qq:0:1"
+      "human-reflection:qq:0:1",
+      "default"
     )
     // 读侧无 meta 已视为 approved
     expect(repo.reflectionEntries().find((r) => r.id === id)!.status).toBe(
@@ -88,23 +92,27 @@ describe("reflection_meta / reflectionEntries", () => {
       "human-reflection",
       "旧条目",
       "human-reflection:qq:100:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "100", "q", "a")
     repo.replaceReflectionEntries(
       [id],
       [{ content: "新条目", embedding: vec() }],
       9_000_000,
+      "default",
       ["旧条目"],
       ["新条目"]
     )
     const entries = repo.reflectionEntries()
     expect(entries).toHaveLength(1)
-    // 新条目 chatId=0(全局归属)、无 meta;旧 meta 已随 chunk 删除
+    // 整理后条目无来源 chat(channel/chatId 为 null,不编造 qq:0)、无 meta;
+    // 旧 meta 已随 chunk 删除。namespace 须留在原分区
     expect(entries[0]).toMatchObject({
       content: "新条目",
-      channel: "qq",
-      chatId: "0",
+      channel: null,
+      chatId: null,
+      namespace: "default",
       question: null,
       answer: null,
       status: "approved",
@@ -122,7 +130,14 @@ describe("reflection_meta / reflectionEntries", () => {
 
   it("recentCompactions 按 ts 倒序、limit 生效", () => {
     for (const ts of [100, 300, 200]) {
-      repo.replaceReflectionEntries([], [], ts, [`b${ts}`], [`a${ts}`])
+      repo.replaceReflectionEntries(
+        [],
+        [],
+        ts,
+        "default",
+        [`b${ts}`],
+        [`a${ts}`]
+      )
     }
     const rc = repo.recentCompactions(2)
     expect(rc.map((r) => r.ts)).toEqual([300, 200])
@@ -138,7 +153,14 @@ describe("整理记录摘要 / 详情分离", () => {
   })
 
   it("recentCompactionSummaries 不带 before/after 全文", () => {
-    repo.replaceReflectionEntries([], [], 1_000, ["旧甲", "旧乙"], ["新甲"])
+    repo.replaceReflectionEntries(
+      [],
+      [],
+      1_000,
+      "default",
+      ["旧甲", "旧乙"],
+      ["新甲"]
+    )
     const rows = repo.recentCompactionSummaries(10)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toEqual({
@@ -158,7 +180,14 @@ describe("整理记录摘要 / 详情分离", () => {
 
   it("recentCompactionSummaries 按 ts 倒序、limit 生效", () => {
     for (const ts of [100, 300, 200]) {
-      repo.replaceReflectionEntries([], [], ts, [`b${ts}`], [`a${ts}`])
+      repo.replaceReflectionEntries(
+        [],
+        [],
+        ts,
+        "default",
+        [`b${ts}`],
+        [`a${ts}`]
+      )
     }
     expect(repo.recentCompactionSummaries(2).map((r) => r.ts)).toEqual([
       300, 200,
@@ -166,7 +195,14 @@ describe("整理记录摘要 / 详情分离", () => {
   })
 
   it("compactionDetail 按 id 取单条全文", () => {
-    repo.replaceReflectionEntries([], [], 2_000, ["旧甲", "旧乙"], ["新甲"])
+    repo.replaceReflectionEntries(
+      [],
+      [],
+      2_000,
+      "default",
+      ["旧甲", "旧乙"],
+      ["新甲"]
+    )
     const id = repo.recentCompactionSummaries(1)[0].id
     expect(repo.compactionDetail(id)).toEqual({
       id,
@@ -183,7 +219,7 @@ describe("整理记录摘要 / 详情分离", () => {
   })
 
   it("compactionDetail 遇坏 JSON 回退空数组", () => {
-    repo.replaceReflectionEntries([], [], 3_000, ["旧"], ["新"])
+    repo.replaceReflectionEntries([], [], 3_000, "default", ["旧"], ["新"])
     const id = repo.recentCompactionSummaries(1)[0].id
     db.prepare(
       "UPDATE reflect_compactions SET before_json = '{坏', after_json = 'null' WHERE id = ?"
@@ -201,14 +237,17 @@ describe("deleteKbChunk", () => {
       "human-reflection",
       "原文",
       "human-reflection:qq:100:5",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "100", "问", "答")
     expect(repo.deleteKbChunk(id)).toBe(true)
     // 反思 list 查不到(LEFT JOIN 没了)
     expect(repo.reflectionEntries().find((e) => e.id === id)).toBeUndefined()
     // 检索也不再命中
-    expect(repo.searchKb(vec(), 5).find((h) => h.id === id)).toBeUndefined()
+    expect(
+      repo.searchKb(vec(), 5, "default").find((h) => h.id === id)
+    ).toBeUndefined()
     // meta 行也被清,不留孤儿(直接查表)
     const d = (repo as unknown as { db: import("better-sqlite3").Database }).db
     expect(
@@ -224,7 +263,8 @@ describe("deleteKbChunk", () => {
     const id = repo.insertKbChunk(
       "human-reflection",
       "无meta",
-      "human-reflection:qq:0:1"
+      "human-reflection:qq:0:1",
+      "default"
     )
     expect(repo.deleteKbChunk(id)).toBe(true)
     expect(repo.reflectionEntries()).toHaveLength(0)

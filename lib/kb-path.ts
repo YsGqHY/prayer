@@ -14,6 +14,17 @@ export function isKbRelPath(rel: string): boolean {
   return rel.endsWith(".md") || rel.endsWith(".txt")
 }
 
+/**
+ * 知识库相对路径 → 分区名。一级子目录名即分区,根目录散文件归 default。
+ * 例:acme/faq/退款.md → acme;README.md → default。
+ * 路径→分区的唯一事实源(ingest 与 kb API 共用);回落值与 resolveKbNamespace 一致。
+ */
+export function namespaceOfRel(rel: string): string {
+  const i = rel.indexOf("/")
+  if (i <= 0) return "default"
+  return rel.slice(0, i)
+}
+
 /** catch-all 段 → 相对 posix 路径 */
 export function relFromParts(parts: string[]): string {
   return parts.map((p) => decodeURIComponent(p)).join("/")

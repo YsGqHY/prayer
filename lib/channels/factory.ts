@@ -3,6 +3,7 @@ import type { Repo } from "../db/repo"
 import type { Channel, ChannelId } from "./types"
 import { QqChannel } from "./qq"
 import { TelegramChannel } from "./tg/client"
+import { MiraiChannel } from "./mirai"
 
 /**
  * 通道工厂上下文：配置 + 可选依赖注入（offset 持久化、状态回调、测试替身）。
@@ -56,6 +57,40 @@ export const DEFAULT_CHANNEL_FACTORIES: ChannelFactoryEntry[] = [
         getOffset: () => Number(repo.getConfigRow("tg:update_offset") ?? "0"),
         setOffset: (n) => repo.setConfigRow("tg:update_offset", String(n)),
         onStatus: ctx.onStatus?.tg,
+      })
+    },
+  },
+  {
+    id: "mirai",
+    create(ctx) {
+      if (ctx.overrides?.mirai) return ctx.overrides.mirai(ctx)
+      const { cfg } = ctx
+      if (!cfg.miraiWsEnabled) return null
+      if (cfg.miraiWsMode === "client") {
+        const url = cfg.miraiWsUrl?.trim()
+        const token = cfg.miraiWsToken?.trim()
+        const clientId = cfg.miraiWsClientId?.trim()
+        if (!url || !token || !clientId) return null
+        return new MiraiChannel({
+          mode: "client",
+          url,
+          token,
+          clientId,
+          onStatus: ctx.onStatus?.mirai,
+        })
+      }
+      // 无凭据不注册:开放的 WS 端口等于任何人都能让 bot 在群里发言
+      const clients = Object.fromEntries(
+        Object.entries(cfg.miraiWsClients ?? {}).filter(
+          ([id, token]) => id.trim() && token.trim()
+        )
+      )
+      if (Object.keys(clients).length === 0) return null
+      return new MiraiChannel({
+        port: cfg.miraiWsPort,
+        mode: "server",
+        clients,
+        onStatus: ctx.onStatus?.mirai,
       })
     },
   },

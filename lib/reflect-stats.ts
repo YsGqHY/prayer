@@ -18,7 +18,8 @@ export function buildGroupChatStats(repo: Repo) {
   const sed = new Map<string, number>()
   for (const r of repo.reflectionSources()) {
     const p = parseReflectionSource(r.source)
-    if (p) {
+    // 整理后条目无来源 chat(channel/chatId 为 null),不计入任何会话的沉淀数
+    if (p?.channel && p.chatId) {
       const k = chatKey(p.channel, p.chatId)
       sed.set(k, (sed.get(k) ?? 0) + 1)
     }

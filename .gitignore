@@ -54,3 +54,10 @@ servers.json
 .agents/
 .playwright-mcp/
 .codegraph/
+
+# mirai 插件构建产物(JVM 栈,与 Node 侧构建分开)
+mirai-plugin/build/
+mirai-plugin/.gradle/
+
+# NarraFork 工具产物(计划/截图,非项目源码)
+.narrafork/

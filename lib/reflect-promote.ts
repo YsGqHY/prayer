@@ -72,9 +72,10 @@ export async function applyPromote(
   // 三个 DB 步骤同一事务:中途失败整体回滚,原反思条目保留。
   // 此前是三次独立写且先删后插——崩溃窗口内正式文档会从 KB 消失到重新 ingest。
   repo.transaction(() => {
-    // 正式文档入库:先清旧分块再写,保证幂等(同 chunk 重复升格覆盖旧文件)
-    repo.deleteKbDoc(rel)
-    repo.insertKbEntry(rel, body, rel, vec)
+    // 正式文档入库:先清旧分块再写,保证幂等(同 chunk 重复升格覆盖旧文件)。
+    // 分区沿用原反思条目——升格只是把知识固化成文档,归属不变。
+    repo.deleteKbDoc(rel, entry.namespace)
+    repo.insertKbEntry(rel, body, rel, vec, entry.namespace)
     // 原反思 chunk 物理删除,避免 list / 检索双份残留
     repo.deleteKbChunk(chunkId)
   })

@@ -1,13 +1,25 @@
 import type { ReflectionRow } from "./rows.ts"
 import type { ReflectionStatus, ReflectionEntry } from "./models.ts"
 
-/** 解析反思 source:新 human-reflection:{channel}:{chatId}:{ts};旧 human-reflection:{gid}:{ts}→qq */
+/**
+ * 解析反思 source。三种形态:
+ * - 沉淀:human-reflection:{channel}:{chatId}:{ts}
+ * - 整理后:human-reflection:ns={namespace}:{ts} —— 不再对应单一来源 chat,
+ *   故 channel/chatId 为 null,但 ts 是真实整理时间,必须保留(web 侧要显示)
+ * - 旧库:human-reflection:{gid}:{ts} → 归 qq
+ */
 export function parseReflectionSource(
   source: string | null
-): { channel: string; chatId: string; ts: number } | null {
+): { channel: string | null; chatId: string | null; ts: number } | null {
   if (!source?.startsWith("human-reflection:")) return null
   const rest = source.slice("human-reflection:".length)
   const parts = rest.split(":")
+  // 整理后条目:仅带分区标记与时间戳
+  if (parts.length === 2 && parts[0].startsWith("ns=")) {
+    const ts = Number(parts[1])
+    if (!Number.isFinite(ts)) return null
+    return { channel: null, chatId: null, ts }
+  }
   // 新格式:至少 channel + chatId + ts
   if (parts.length >= 3) {
     const channel = parts[0]
@@ -50,6 +62,8 @@ export function mapReflectionRow(r: ReflectionRow): ReflectionEntry {
     question: r.question,
     answer: r.answer,
     status: normalizeReflectionStatus(r.status),
+    // 旧行(查询未选该列)回落 default,与 resolveKbNamespace 的漏配语义一致
+    namespace: r.namespace ?? "default",
   }
 }
 

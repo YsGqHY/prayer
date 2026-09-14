@@ -71,6 +71,49 @@ export function getGroupPolicy(
   return undefined
 }
 
+/** 未配置 kbNamespace 时的回落分区(亦为存量语料所在分区) */
+export const DEFAULT_KB_NAMESPACE = "default"
+
+/**
+ * 解析会话对应的知识库分区。全项目唯一入口,禁止各调用点自行拼装。
+ *
+ * 一个会话只有一份知识库;多个会话可共用同一 namespace(同租户多群)。
+ * 未配置 → DEFAULT_KB_NAMESPACE:存量兼容所必需,但多租户下漏配等于读到
+ * default 分区(跨租户泄漏面),后台对「已生效但未配」的会话给出显式告警。
+ * 复用 getGroupPolicy,连带获得 QQ 裸群号 legacy 键兼容。
+ */
+export function resolveKbNamespace(
+  cfg:
+    | Pick<AppConfig, "groupPolicies">
+    | { groupPolicies: Record<string, GroupPolicy> },
+  channel: ChannelId,
+  chatId: string
+): string {
+  const ns = getGroupPolicy(cfg, channel, chatId)?.kbNamespace?.trim()
+  return ns || DEFAULT_KB_NAMESPACE
+}
+
+/** 会话级 namespace 解析器:注入给编排与旁路轮询器,避免各处传整张 policies 表 */
+export type KbNamespaceResolver = (
+  channel: ChannelId,
+  chatId: string
+) => string
+
+/**
+ * 已生效但未显式配置 kbNamespace 的会话。
+ *
+ * 这类会话会静默回落 default 分区,多租户下等于读到存量语料或别的未配置会话
+ * 沉淀的知识 —— 是本功能唯一的跨租户泄漏面。后台据此给出显式告警,
+ * 而不是让默认值悄悄生效。单租户部署全部落 default 属正常,可忽略该提示。
+ */
+export function chatsMissingKbNamespace(
+  cfg: Pick<AppConfig, "groupPolicies"> & EnablementConfig
+): ChatRef[] {
+  return listEnabledChats(cfg).filter(
+    (c) => !getGroupPolicy(cfg, c.channel, c.chatId)?.kbNamespace?.trim()
+  )
+}
+
 /** 从完整 AppConfig 一次解析 agent 装配用的生效会话 + 管理面 */
 export function resolveRuntimeChatConfig(cfg: AppConfig): {
   enabledChats: ChatRef[]

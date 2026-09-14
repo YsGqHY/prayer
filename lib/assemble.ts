@@ -17,7 +17,7 @@ import { registerHandoffHandler } from "./agent/handoff-handler"
 import { registerResolutionRecorder } from "./agent/resolution-recorder"
 import type { GroupPolicy } from "./config-store"
 import type { ChannelId, ChatRef } from "./channels/types"
-import { getGroupPolicy } from "./channels/enabled-chats"
+import { getGroupPolicy, resolveKbNamespace } from "./channels/enabled-chats"
 import type { BrandInput } from "./brand"
 
 export interface AssembleDeps {
@@ -87,6 +87,11 @@ export function assemble(deps: AssembleDeps): () => void {
     return true
   }
 
+  // 知识库分区解析器:主链路与三个反思旁路共用一份,避免各处传整张 policies 表。
+  // 漏配 kbNamespace 的会话回落 default(见 resolveKbNamespace)。
+  const resolveNamespace = (channel: ChannelId, chatId: string) =>
+    resolveKbNamespace({ groupPolicies: policies }, channel, chatId)
+
   // 主动补位:全局开,或任一群策略显式开
   const anyGroupProactive = Object.values(policies).some(
     (p) => p.proactiveEnabled === true
@@ -117,6 +122,7 @@ export function assemble(deps: AssembleDeps): () => void {
       store,
       classify: makeIntentClassifier({ brand: deps.brand }),
       ackEnabled: deps.ackEnabled !== false,
+      resolveNamespace,
     }),
     registerReplyMapper({ maxChars: deps.maxReplyChars ?? 900 }),
     registerMessageBuffer({
@@ -146,6 +152,7 @@ export function assemble(deps: AssembleDeps): () => void {
       windowMax: deps.reflectWindowMax,
       notifyAdmin,
       isBypassEnabled: deps.isBypassEnabled,
+      resolveNamespace,
     }),
   ]
   if ((deps.reflectCompactMs ?? 3_600_000) > 0) {

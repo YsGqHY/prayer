@@ -34,15 +34,15 @@ describe("Repo deleteKbDoc / renameKbDoc", () => {
   })
 
   it("deleteKbDoc 清 chunk+vec", () => {
-    repo.insertKbEntry("faq/a.md", "内容A", "faq/a.md", vec())
-    repo.insertKbEntry("faq/b.md", "内容B", "faq/b.md", vec())
+    repo.insertKbEntry("faq/a.md", "内容A", "faq/a.md", vec(), "default")
+    repo.insertKbEntry("faq/b.md", "内容B", "faq/b.md", vec(), "default")
     expect(repo.deleteKbDoc("faq/a.md")).toBe(1)
     expect(repo.kbChunksByDoc("faq/a.md")).toHaveLength(0)
     expect(repo.kbChunksByDoc("faq/b.md")).toHaveLength(1)
   })
 
   it("renameKbDoc 更新 doc 与同值 source", () => {
-    repo.insertKbEntry("old.md", "正文", "old.md", vec())
+    repo.insertKbEntry("old.md", "正文", "old.md", vec(), "default")
     expect(repo.renameKbDoc("old.md", "new.md")).toBe(1)
     expect(repo.kbChunksByDoc("old.md")).toHaveLength(0)
     const rows = repo.kbChunksByDoc("new.md")

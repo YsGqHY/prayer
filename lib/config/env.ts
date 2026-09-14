@@ -80,6 +80,15 @@ export function seedFromEnv(
     ),
     enabledChats: enabledChatsFromEnv(env),
     telegramBotToken: env.TELEGRAM_BOT_TOKEN ?? defaults.telegramBotToken,
+    miraiWsEnabled: env.MIRAI_WS_ENABLED === "true",
+    miraiWsMode: env.MIRAI_WS_MODE ?? defaults.miraiWsMode,
+    miraiWsUrl: env.MIRAI_WS_URL ?? defaults.miraiWsUrl,
+    miraiWsClientId: env.MIRAI_WS_CLIENT_ID ?? defaults.miraiWsClientId,
+    miraiWsToken: env.MIRAI_WS_TOKEN ?? defaults.miraiWsToken,
+    miraiWsPort: Number(env.MIRAI_WS_PORT ?? defaults.miraiWsPort),
+    // 凭据表只在后台配置(掩码写回),env 不提供 —— 多组 clientId:token 塞进
+    // 单个环境变量易出错,且明文留在 shell 历史里
+    miraiWsClients: defaults.miraiWsClients,
     proactiveEnabled: env.PROACTIVE_ENABLED === "true",
     proactiveScanMs: Number(env.PROACTIVE_SCAN_MS ?? defaults.proactiveScanMs),
     proactiveSilenceMs: Number(

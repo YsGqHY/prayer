@@ -74,7 +74,8 @@ interface KbStats {
   chunks: number
   vecs: number
   dim: number
-  docs: { doc: string; chunks: number }[]
+  /** doc 为含分区前缀的相对路径,故仍可唯一匹配;namespace 供分区维度统计 */
+  docs: { namespace: string; doc: string; chunks: number }[]
 }
 interface KbChunk {
   id: number
@@ -275,6 +276,24 @@ export default function KbPage() {
 
   const chunksOf = (f: string) =>
     stats?.docs.find((d) => d.doc === f)?.chunks ?? 0
+
+  // 分区概览:多分区时列出各分区分块数,单一 default 时只标一句,避免噪声
+  const nsSummary = useMemo(() => {
+    const docs = stats?.docs ?? []
+    if (docs.length === 0) return "无分区"
+    const byNs = new Map<string, number>()
+    for (const d of docs) {
+      byNs.set(d.namespace, (byNs.get(d.namespace) ?? 0) + d.chunks)
+    }
+    if (byNs.size === 1) {
+      const [ns] = [...byNs.keys()]
+      return `分区 ${ns}`
+    }
+    return `${byNs.size} 个分区(${[...byNs.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([ns, n]) => `${ns} ${n}`)
+      .join(" · ")})`
+  }, [stats?.docs])
 
   const filteredFiles = useMemo(() => {
     if (!files) return []
@@ -657,8 +676,8 @@ export default function KbPage() {
 
       {stats && (
         <p className="shrink-0 text-xs text-muted-foreground tabular-nums">
-          {stats.docs.length} 个文档 · {stats.chunks} 个分块 · 已索引{" "}
-          {stats.vecs} · 维度 {stats.dim}
+          {nsSummary} · {stats.docs.length} 个文档 · {stats.chunks} 个分块 ·
+          已索引 {stats.vecs} · 维度 {stats.dim}
         </p>
       )}
 

@@ -1,7 +1,11 @@
 import type { ActionSend } from "../events"
 
-/** 通道标识；discord 一期仅预留类型，不实现 */
-export const CHANNEL_IDS = ["qq", "tg", "discord"] as const
+/**
+ * 通道标识；discord 一期仅预留类型，不实现。
+ * mirai：Prayer 作 WS 服务端，远程 mirai 插件作客户端连入（见 channels/mirai）。
+ * 新增值必须同步 channels/ids.ts 内的 CHANNELS 副本，否则 sessionKey 解析会判为非法。
+ */
+export const CHANNEL_IDS = ["qq", "tg", "mirai", "discord"] as const
 export type ChannelId = (typeof CHANNEL_IDS)[number]
 
 /** 通道无关会话引用（白名单 / 游标 / policy / 管理面） */

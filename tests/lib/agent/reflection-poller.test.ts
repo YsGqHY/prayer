@@ -185,7 +185,7 @@ describe("reflection-poller runScan", () => {
     const a = await notice
     expect(a.channel).toBe("qq")
     expect(a.chatId).toBe("999")
-    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 1)
+    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")
     expect(hits[0].content).toContain("退款")
     expect(hits[0].source).toContain("human-reflection:qq:100:")
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000) // until = now - settle
@@ -231,7 +231,7 @@ describe("reflection-poller runScan", () => {
       })
     )
     expect(spy).not.toHaveBeenCalled()
-    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1)).toHaveLength(1)
+    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")).toHaveLength(1)
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000)
   })
 
@@ -247,7 +247,7 @@ describe("reflection-poller runScan", () => {
       })
     )
     expect(spy).not.toHaveBeenCalled()
-    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1)).toHaveLength(0)
+    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")).toHaveLength(0)
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000)
   })
 
@@ -270,7 +270,7 @@ describe("reflection-poller runScan", () => {
   it("无 structured 且无文本 → 不入库,游标不动(下轮重试)", async () => {
     seed(100, 201, "admin", "答案", NOW - 4000)
     await runScan(opts({ queryFn: fakeQuery(undefined) as never }))
-    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1)).toHaveLength(0)
+    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")).toHaveLength(0)
     expect(repo.groupReflectCursor("qq", "100")).toBe(0)
   })
 
@@ -295,7 +295,7 @@ describe("reflection-poller runScan", () => {
         } as never,
       })
     )
-    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 5)
+    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 5, "default")
     expect(hits.some((h) => h.content.includes("退款一般三天"))).toBe(true)
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000)
   })
@@ -303,7 +303,7 @@ describe("reflection-poller runScan", () => {
   it("空 items → 不入库,仍推进游标", async () => {
     seed(100, 201, "admin", "答案", NOW - 4000)
     await runScan(opts({ queryFn: fakeQuery({ items: [] }) as never }))
-    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1)).toHaveLength(0)
+    expect(repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")).toHaveLength(0)
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000)
   })
 
@@ -337,7 +337,8 @@ describe("reflection-poller runScan", () => {
       "faq/refund.md",
       "退款一般三个工作日到账",
       "faq/refund.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     seed(100, 200, "member", "退款多久?", NOW - 5000)
     seed(100, 201, "admin", "3 个工作日", NOW - 4000)
@@ -356,7 +357,8 @@ describe("reflection-poller runScan", () => {
       "faq/refund.md",
       "退款一般3个工作日到账",
       "faq/refund.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     seed(100, 200, "member", "退款多久?", NOW - 5000)
     seed(100, 201, "admin", "3 个工作日", NOW - 4000)
@@ -396,7 +398,7 @@ describe("reflection-poller runScan", () => {
         }) as never,
       })
     )
-    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 10)
+    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 10, "default")
     // 相同 FAQ 第二次被硬去重
     expect(hits.filter((h) => h.content === "通用知识条")).toHaveLength(1)
     expect(repo.groupReflectCursor("qq", "100")).toBe(NOW - 1000)
@@ -469,7 +471,7 @@ describe("reflection-poller runScan", () => {
     expect(e.channel).toBe("qq")
     expect(repo.groupReflectCursor("qq", "100")).toBe(0) // 抛错群不推进
     expect(repo.groupReflectCursor("qq", "200")).toBe(NOW - 1000) // 正常群推进
-    expect(repo.searchKb(new Float32Array([1, 0, 0]), 10)).toHaveLength(1) // 只群200沉淀
+    expect(repo.searchKb(new Float32Array([1, 0, 0]), 10, "default")).toHaveLength(1) // 只群200沉淀
   })
 
   it("非生效群即使有已沉降管理发言也跳过,不调用 LLM,游标不动", async () => {
@@ -567,15 +569,23 @@ describe("collectKbContext", () => {
       "a.md",
       "退款政策说明",
       "a.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertKbEntry(
       "b.md",
       "密码重置流程",
       "b.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
-    const hits = await collectKbContext(repo, embed, ["退款多久", "退款"], 1)
+    const hits = await collectKbContext(
+      repo,
+      embed,
+      ["退款多久", "退款"],
+      1,
+      "default"
+    )
     expect(hits).toHaveLength(1)
   })
 })

@@ -36,7 +36,8 @@ function seedReflections(n: number) {
       "human-reflection",
       `反思${i}`,
       `human-reflection:100:${i}`,
-      vec()
+      vec(),
+      "default"
     )
   }
 }
@@ -82,7 +83,7 @@ describe("runCompact", () => {
     expect(repo.reflectionEntries()).toHaveLength(2)
   })
 
-  it("正常整理 → 库被替换为新集 + 通知管理群 + gid 为 0", async () => {
+  it("正常整理 → 库被替换为新集 + 通知管理群 + 无来源 chat 但保留 ts 与分区", async () => {
     seedReflections(5)
     const notice = new Promise<ActionSend>((res) =>
       bus.once("action.send", res)
@@ -100,9 +101,15 @@ describe("runCompact", () => {
       "合并1",
       "合并2",
     ])
+    // 整理后条目不再对应单一来源 chat:channel/chatId 为 null(此前编造 qq:0),
+    // 但 ts 是真实整理时间,必须保留;namespace 须留在原分区
     expect(
       refs.every(
-        (r) => r.chatId === "0" && r.channel === "qq" && r.ts === 7_000_000
+        (r) =>
+          r.chatId === null &&
+          r.channel === null &&
+          r.ts === 7_000_000 &&
+          r.namespace === "default"
       )
     ).toBe(true)
   })
@@ -234,7 +241,7 @@ describe("runCompact", () => {
 
   it("基础上下文:去重后的基础片段注入 prompt(同一 chunk 只出现一次)", async () => {
     seedReflections(3) // 3 条反思,同一向量都最近邻到同一基础 chunk
-    repo.insertKbEntry("faq/x.md", "基础片段X", "faq/x.md", vec())
+    repo.insertKbEntry("faq/x.md", "基础片段X", "faq/x.md", vec(), "default")
     let captured = ""
     const qf = (args: { prompt: string }) => {
       captured = args.prompt

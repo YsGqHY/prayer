@@ -1019,3 +1019,28 @@ export function ensureHotReadIndexes(db: Database.Database): void {
 export function migrateToVersion8(db: Database.Database): void {
   ensureHotReadIndexes(db)
 }
+
+/**
+ * v9：知识库按 namespace 分区。
+ *
+ * 一个会话只对应一份知识库(chat → namespace 多对一),映射由 groupPolicies.kbNamespace
+ * 提供。存量 chunk 全部回填 'default',单租户部署行为不变;漏配 kbNamespace 的会话
+ * 同样回落 'default'(见 resolveKbNamespace),不会串到其它租户的分区。
+ */
+export function ensureKbNamespace(db: Database.Database): void {
+  if (!tableExists(db, "kb_chunks")) return
+  if (!tableColumns(db, "kb_chunks").has("namespace")) {
+    db.exec(
+      "ALTER TABLE kb_chunks ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'"
+    )
+  }
+  // 检索恒带 namespace 等值条件;doc 复合索引供 ingest 按 (namespace, doc) 联合 prune
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_kb_chunks_ns ON kb_chunks(namespace);
+    CREATE INDEX IF NOT EXISTS idx_kb_chunks_ns_doc ON kb_chunks(namespace, doc);
+  `)
+}
+
+export function migrateToVersion9(db: Database.Database): void {
+  ensureKbNamespace(db)
+}

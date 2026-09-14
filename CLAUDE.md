@@ -32,6 +32,7 @@ GitHub Actions 在 PR 与 main 推送时运行 `pnpm check` 和生产构建。�
 - **Prettier:无分号 + 双引号**（`semi:false`, `singleQuote:false`, `trailingComma:es5`, printWidth 80）。不匹配 `pnpm format` 会全量重写。
 - **测试放 `tests/`（镜像 `lib/` 结构),不与源码同目录** —— `include` 只认 `tests/**/*.test.ts`。
 - native 依赖（`better-sqlite3`、`sqlite-vec`、`@huggingface/transformers`）在 `next.config.ts` 的 `serverExternalPackages`,别打包。嵌入用本地 `Xenova/bge-small-zh-v1.5`。
+- **知识库按 namespace 分区**（`kb_chunks.namespace`,DB v9）:一个会话只读写一份知识库。解析只走 `resolveKbNamespace`（`lib/channels/enabled-chats.ts`),路径→分区只走 `namespaceOfRel`（`lib/kb-path.ts`）,不要在调用点自行拼装。写入方法（`insertKbEntry`/`insertKbChunk`）的 namespace 必传且无默认值 —— 漏传应编译报错,不能静默落进 `default`。**分区绝不能由模型声明**（工具参数/prompt 都不行）,只能服务端经 `KB_NAMESPACE` env 注入给 MCP 子进程。详见 `docs/architecture.md` 第 9 节。
 - Next.js 16 与你熟悉的不同,写前先读 `node_modules/next/dist/docs/`（见 AGENTS.md）。
 
 ## 仓库结构

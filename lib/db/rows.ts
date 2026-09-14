@@ -27,6 +27,8 @@ export interface ReflectionRow {
   question: string | null
   answer: string | null
   status: string
+  /** kb_chunks.namespace;未选该列的旧查询为 undefined,由 mapper 回落 default */
+  namespace?: string | null
 }
 
 export interface ReflectionSummaryRow {
@@ -37,6 +39,7 @@ export interface ReflectionSummaryRow {
   question: string | null
   answer: string | null
   status: string
+  namespace?: string | null
 }
 
 export interface CompactionSummaryRow {

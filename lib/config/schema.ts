@@ -37,6 +37,11 @@ export const groupPolicySchema = z.object({
   proactiveEnabled: z.boolean().optional(),
   proactiveSilenceMs: z.number().int().min(0).optional(),
   notifyAdminOnHandoff: z.boolean().optional(),
+  /**
+   * 该会话使用的知识库分区；未填写回落 "default"。
+   * 多个会话可填同一值以共用一份知识库；一个会话只能有一份。
+   */
+  kbNamespace: z.string().trim().min(1).max(64).optional(),
 })
 
 /** 配置字段、默认值与类型的唯一来源；不得引入数据库或运行时依赖。 */
@@ -63,6 +68,25 @@ export const appConfigSchema = z.object({
   claudeConfigDir: z.string().default("./data/claude-config"),
   enabledChats: z.array(chatRefSchema).default([]),
   telegramBotToken: z.string().default(""),
+
+  /** 角色均从 Prayer 视角命名；旧配置默认监听，兼容现有插件。 */
+  miraiWsEnabled: z.boolean().default(false),
+  miraiWsMode: z.enum(["server", "client"]).default("server"),
+  miraiWsUrl: z.string().trim().default(""),
+  miraiWsClientId: z.string().trim().default("mirai-1"),
+  miraiWsToken: z.string().trim().default(""),
+  /**
+   * WS 服务端监听端口。默认 3002 —— 3000 是 Next.js(ecosystem.config.cjs),
+   * 3001 是 NapCat OneBot 的既定地址(.env.example 的 ONEBOT_WS_URL);
+   * 与 OneBot 同机部署时占用 3001 会直接 EADDRINUSE 起不来。
+   */
+  miraiWsPort: safeInteger(1, 65535).default(3002),
+  /**
+   * 接入端凭据表:key 为 clientId,value 为 token。空表 = 不启动服务端
+   * (无凭据的开放端口等于任何人都能让 bot 在群里发言)。
+   * 绝不复用 ADMIN_TOKEN：那等于把后台管理权交给接入方。
+   */
+  miraiWsClients: z.record(z.string(), z.string()).default({}),
 
   reflectScanMs: scanMs.default(300_000),
   reflectLookbackMs: durationMs.default(7_200_000),
@@ -101,15 +125,19 @@ export const appConfigSchema = z.object({
 })
 
 type ParsedAppConfig = z.output<typeof appConfigSchema>
+type DefaultedConfigKey =
+  | "brandName"
+  | "brandDescription"
+  | "miraiWsMode"
+  | "miraiWsUrl"
+  | "miraiWsClientId"
+  | "miraiWsToken"
 /**
- * 对外保留新增品牌字段的旧调用兼容性：历史测试/集成方可以继续构造旧形状，
+ * 对外保留新增字段的旧调用兼容性：历史测试/集成方可以继续构造旧形状，
  * 但所有经过 schema 的运行时配置都会带上默认值。
  */
-export type AppConfig = Omit<
-  ParsedAppConfig,
-  "brandName" | "brandDescription"
-> &
-  Partial<Pick<ParsedAppConfig, "brandName" | "brandDescription">>
+export type AppConfig = Omit<ParsedAppConfig, DefaultedConfigKey> &
+  Partial<Pick<ParsedAppConfig, DefaultedConfigKey>>
 export type GroupPolicy = z.output<typeof groupPolicySchema>
 
 export function isConfigRecord(

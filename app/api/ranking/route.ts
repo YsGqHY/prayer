@@ -8,6 +8,7 @@ import {
   DEFAULT_DUP_TOP_K,
   DEFAULT_DUP_MAX_DISTANCE,
 } from "@/lib/agent/reflection-poller"
+import { DEFAULT_KB_NAMESPACE } from "@/lib/channels/enabled-chats"
 
 // 窗口 → 起始时间戳(ms)。all → 0。
 function sinceTs(window: string, now: number): number {
@@ -25,6 +26,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const raw = req.nextUrl.searchParams.get("window") ?? "7d"
     const window = raw === "30d" || raw === "all" ? raw : "7d"
     const since = sinceTs(window, now)
+    // 主题按 question_occurrences 跨会话聚合,没有单一分区归属;
+    // KB 覆盖率只能针对某一分区评估,由 ?ns= 指定,缺省 default。
+    const namespace =
+      req.nextUrl.searchParams.get("ns")?.trim() || DEFAULT_KB_NAMESPACE
 
     const ranked = repo.rankingByWindow(since)
     const topics = []
@@ -34,7 +39,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const probes = await mapWithConcurrency(ranked.slice(0, TOP_KB), 4, async (r) => {
       const samples = samplesByTopic.get(r.id) ?? []
       const probe = samples[0] ?? r.title
-      const hits = repo.searchKb(await embed(probe), DEFAULT_DUP_TOP_K)
+      const hits = repo.searchKb(await embed(probe), DEFAULT_DUP_TOP_K, namespace)
       const dup = isDuplicateOfHits(probe, hits, DEFAULT_DUP_MAX_DISTANCE)
       return { id: r.id, samples, kbCovered: dup.duplicate, kbDistance: dup.hit?.distance ?? (hits.length ? hits[0].distance : null) }
     })

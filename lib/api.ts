@@ -14,5 +14,13 @@ export function maskConfig(cfg: AppConfig): AppConfig {
     ...cfg,
     onebotAccessToken: maskSecret(cfg.onebotAccessToken),
     telegramBotToken: maskSecret(cfg.telegramBotToken),
+    miraiWsToken: maskSecret(cfg.miraiWsToken ?? ""),
+    // 逐个掩码接入端 token;保留 clientId 明文以便后台展示与编辑
+    miraiWsClients: Object.fromEntries(
+      Object.entries(cfg.miraiWsClients ?? {}).map(([id, token]) => [
+        id,
+        maskSecret(token),
+      ])
+    ),
   }
 }

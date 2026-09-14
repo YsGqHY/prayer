@@ -27,6 +27,10 @@ const cfg: AppConfig = {
   kbPrefetchMaxDistance: 1.0,
   enabledChats: [],
   telegramBotToken: "tg-secret-1234",
+  miraiWsEnabled: true,
+  miraiWsPort: 3002,
+  miraiWsToken: "outbound-secret-6789",
+  miraiWsClients: { "mirai-1": "mirai-secret-5678" },
   proactiveEnabled: false,
   proactiveScanMs: 60000,
   proactiveSilenceMs: 180000,
@@ -52,5 +56,8 @@ describe("api helpers", () => {
     expect(m.onebotAccessToken).toBe("••••9999")
     expect(m.telegramBotToken).toBe("••••1234")
     expect(m.onebotWsUrl).toBe("ws://x:1") // 非 secret 不动
+    // mirai 接入端逐条掩码,clientId 保持明文以便后台展示
+    expect(m.miraiWsClients).toEqual({ "mirai-1": "••••5678" })
+    expect(m.miraiWsToken).toBe("••••6789")
   })
 })

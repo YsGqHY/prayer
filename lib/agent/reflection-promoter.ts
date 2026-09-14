@@ -183,9 +183,11 @@ export async function runPromote(
   try {
     const ctx = new Map<number, string>()
     for (const e of candidates) {
+      // 矛盾校验的权威文档限定该条目所属分区,不跨租户取事实
       for (const h of d.repo.searchBaseKb(
         await d.embed(e.content),
-        d.baseContextK
+        d.baseContextK,
+        e.namespace
       )) {
         ctx.set(h.id, h.content)
       }

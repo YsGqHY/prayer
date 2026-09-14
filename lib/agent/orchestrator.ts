@@ -11,10 +11,19 @@ import {
   type Intent,
   type IntentClassifier,
 } from "./intent"
+import {
+  DEFAULT_KB_NAMESPACE,
+  type KbNamespaceResolver,
+} from "../channels/enabled-chats"
 
 export interface OrchestratorDeps {
   agent: Agent
   store: SessionStore
+  /**
+   * 会话 → 知识库分区解析器(assemble 基于 groupPolicies 构造)。
+   * 缺省恒 default:单租户部署与既有测试行为不变。
+   */
+  resolveNamespace?: KbNamespaceResolver
   // 前置意图门:命中「套取类」滥用则静默丢弃,不进 agent。缺省 → 不设门(向后兼容)
   classify?: IntentClassifier
   /** @ 后先发 ACK。默认 true */
@@ -59,6 +68,7 @@ export function registerOrchestrator(deps: OrchestratorDeps): () => void {
     ackEnabled = true,
     ackText = DEFAULT_ACK,
     classifyTimeoutMs = DEFAULT_CLASSIFY_TIMEOUT_MS,
+    resolveNamespace = () => DEFAULT_KB_NAMESPACE,
   } = deps
   // 每个 sessionKey 一条 Promise 链,保证串行
   const chains = new Map<string, Promise<void>>()
@@ -130,7 +140,8 @@ export function registerOrchestrator(deps: OrchestratorDeps): () => void {
         chatId: q.chatId,
         userId: q.userId,
       },
-      { images: q.images, quoted: q.quoted, forwarded: q.forwarded }
+      { images: q.images, quoted: q.quoted, forwarded: q.forwarded },
+      resolveNamespace(q.channel, q.chatId)
     )
     // 哨兵泄漏防护:主动模式指令/历史可能诱使主链路也吐出 __NO_ANSWER__。
     // 绝不外发;并丢弃续接,避免连环复读同一污染 transcript。

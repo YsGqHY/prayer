@@ -57,7 +57,9 @@ describe("runIngest", () => {
     await runIngest(repo, dir)
     await runIngest(repo, dir)
 
-    expect(repo.kbDocStats()).toEqual([{ doc: "tiny.md", chunks: 1 }])
+    expect(repo.kbDocStats()).toEqual([
+      { namespace: "default", doc: "tiny.md", chunks: 1 },
+    ])
     expect(repo.kbTotals()).toEqual({ chunks: 1, vecs: 1 })
     expect(repo.kbChunksByDoc("tiny.md").map((c) => c.content)).toEqual([
       "两行文本\n而已",
@@ -72,7 +74,9 @@ describe("runIngest", () => {
 
     writeFileSync(join(dir, "doc.md"), "只剩一段")
     await runIngest(repo, dir)
-    expect(repo.kbDocStats()).toEqual([{ doc: "doc.md", chunks: 1 }])
+    expect(repo.kbDocStats()).toEqual([
+      { namespace: "default", doc: "doc.md", chunks: 1 },
+    ])
     expect(repo.kbChunksByDoc("doc.md")[0]?.content).toBe("只剩一段")
   })
 
@@ -86,7 +90,8 @@ describe("runIngest", () => {
       "human-reflection",
       "反思条目",
       "human-reflection:qq:0:0",
-      new Float32Array([0.1, 0.2, 0.3])
+      new Float32Array([0.1, 0.2, 0.3]),
+      "default"
     )
 
     rmSync(join(dir, "gone.md"))
@@ -98,5 +103,36 @@ describe("runIngest", () => {
         .map((d) => d.doc)
         .sort()
     ).toEqual(["human-reflection", "keep.md"])
+  })
+
+  it("一级子目录名即分区,根目录散文件归 default", async () => {
+    mkdirSync(join(dir, "acme"), { recursive: true })
+    writeFileSync(join(dir, "acme", "faq.md"), "甲租户")
+    writeFileSync(join(dir, "root.md"), "公共")
+    const repo = new Repo(openDb(":memory:", 3))
+    await runIngest(repo, dir)
+
+    const stats = repo.kbDocStats()
+    expect(
+      stats.map((d) => `${d.namespace}/${d.doc}`).sort()
+    ).toEqual(["acme/acme/faq.md", "default/root.md"])
+  })
+
+  it("同名 doc 跨分区不互相 prune", async () => {
+    mkdirSync(join(dir, "acme"), { recursive: true })
+    mkdirSync(join(dir, "globex"), { recursive: true })
+    writeFileSync(join(dir, "acme", "faq.md"), "甲")
+    writeFileSync(join(dir, "globex", "faq.md"), "乙")
+    const repo = new Repo(openDb(":memory:", 3))
+    await runIngest(repo, dir)
+    expect(repo.kbDocStats()).toHaveLength(2)
+
+    // 只删甲的文件:乙的同名 doc 必须留存
+    rmSync(join(dir, "acme", "faq.md"))
+    await runIngest(repo, dir)
+
+    const stats = repo.kbDocStats()
+    expect(stats).toHaveLength(1)
+    expect(stats[0].namespace).toBe("globex")
   })
 })

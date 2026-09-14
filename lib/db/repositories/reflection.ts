@@ -84,7 +84,7 @@ export class ReflectionRepository {
   reflectionEntries(): ReflectionEntry[] {
     const rows = this.sql
       .prepare<ReflectionRow>(
-        `SELECT c.id, c.content, c.source, m.question, m.answer, COALESCE(m.status, 'approved') AS status
+        `SELECT c.id, c.content, c.source, c.namespace, m.question, m.answer, COALESCE(m.status, 'approved') AS status
          FROM kb_chunks c LEFT JOIN reflection_meta m ON m.chunk_id = c.id
          WHERE c.doc = 'human-reflection' ORDER BY c.id DESC`
       )
@@ -102,7 +102,7 @@ export class ReflectionRepository {
     const rows = this.sql
       .prepare<ReflectionSummaryRow>(
         `SELECT c.id, substr(c.content, 1, ?) AS content, length(c.content) AS contentLen,
-              c.source, substr(m.question, 1, ?) AS question, substr(m.answer, 1, ?) AS answer,
+              c.source, c.namespace, substr(m.question, 1, ?) AS question, substr(m.answer, 1, ?) AS answer,
               COALESCE(m.status, 'approved') AS status
          FROM kb_chunks c LEFT JOIN reflection_meta m ON m.chunk_id = c.id
          WHERE c.doc = 'human-reflection' ORDER BY c.id DESC`
@@ -118,7 +118,7 @@ export class ReflectionRepository {
   reflectionEntryDetail(id: number): ReflectionEntry | null {
     const row = this.sql
       .prepare<ReflectionRow>(
-        `SELECT c.id, c.content, c.source, m.question, m.answer, COALESCE(m.status, 'approved') AS status
+        `SELECT c.id, c.content, c.source, c.namespace, m.question, m.answer, COALESCE(m.status, 'approved') AS status
          FROM kb_chunks c LEFT JOIN reflection_meta m ON m.chunk_id = c.id
          WHERE c.id = ? AND c.doc = 'human-reflection'`
       )
@@ -236,11 +236,14 @@ export class ReflectionRepository {
 
   // 整体替换反思库(压缩整理用):单事务只删“快照内”的 human-reflection 条目(按 id,不按 doc),
   // 再插入整理结果 —— 避免删掉压缩 await 期间 poller 并发新增的条目。
-  // source 统一 human-reflection:qq:0:{ts}(chatId 0 = 已压缩,全局归属)。
+  // namespace 必传:整理结果须留在原分区,否则第一次整理就把租户隔离冲掉。
+  // source 记 human-reflection:ns={namespace}:{ts} —— 整理后条目不再对应单一来源 chat,
+  // 故只标注分区而非编造 chatId(此前硬编码 qq:0)。
   replaceReflectionEntries(
     oldIds: number[],
     entries: { content: string; embedding: Float32Array }[],
     sourceTs: number,
+    namespace: string,
     beforeContents: string[] = [],
     afterContents: string[] = []
   ): void {
@@ -253,7 +256,8 @@ export class ReflectionRepository {
         this.sql
           .prepare(`DELETE FROM kb_chunks WHERE id IN (${ph})`)
           .run(...oldIds)
-        // 删被替换 chunk 的来源 meta,避免孤儿(整理后条目 chatId=0、无 meta)
+        // 删被替换 chunk 的来源 meta,避免孤儿:整理后条目不对应单一来源 chat,
+        // 故有意不留 meta(检索侧由 COALESCE(m.status,'approved') 兜底)
         this.sql
           .prepare(`DELETE FROM reflection_meta WHERE chunk_id IN (${ph})`)
           .run(...oldIds)
@@ -262,7 +266,8 @@ export class ReflectionRepository {
         const id = this.knowledge.insertKbChunk(
           "human-reflection",
           e.content,
-          `human-reflection:qq:0:${sourceTs}`
+          `human-reflection:ns=${namespace}:${sourceTs}`,
+          namespace
         )
         this.knowledge.insertKbVec(id, e.embedding)
       }

@@ -105,11 +105,11 @@ describe("Repo dedupe", () => {
 
 describe("Repo kb", () => {
   it("插入 chunk + 向量,可按向量近邻检索", () => {
-    const id = repo.insertKbChunk("faq.md", "退货政策 7 天", "faq")
+    const id = repo.insertKbChunk("faq.md", "退货政策 7 天", "faq", "default")
     repo.insertKbVec(id, new Float32Array([1, 0, 0]))
-    const id2 = repo.insertKbChunk("faq.md", "无关内容", "faq")
+    const id2 = repo.insertKbChunk("faq.md", "无关内容", "faq", "default")
     repo.insertKbVec(id2, new Float32Array([0, 1, 0]))
-    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 1)
+    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 1, "default")
     expect(hits[0].content).toContain("退货")
   })
 
@@ -118,20 +118,23 @@ describe("Repo kb", () => {
       "faq/x.md",
       "基础文档",
       "faq/x.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     const ok = repo.insertKbEntry(
       "human-reflection",
       "已入库反思",
       "human-reflection:qq:1:1",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertReflectionMeta(ok, "qq", "1", "q", "a")
     const bad = repo.insertKbEntry(
       "human-reflection",
       "已驳回反思",
       "human-reflection:qq:1:2",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertReflectionMeta(bad, "qq", "1", "q2", "a2")
     repo.setReflectionStatus(bad, "rejected")
@@ -139,11 +142,12 @@ describe("Repo kb", () => {
       "human-reflection",
       "已升格反思",
       "human-reflection:qq:1:3",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertReflectionMeta(promo, "qq", "1", "q3", "a3")
     repo.setReflectionStatus(promo, "promoted")
-    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 10)
+    const hits = repo.searchKb(new Float32Array([1, 0, 0]), 10, "default")
     const contents = hits.map((h) => h.content)
     expect(contents).toContain("基础文档")
     expect(contents).toContain("已入库反思")
@@ -156,16 +160,26 @@ describe("Repo kb", () => {
   })
 
   it("kbTotals / kbDocStats / kbChunksByDoc 供向量库预览", () => {
-    const a = repo.insertKbChunk("faq/退款.md", "退款要 7 天", "faq/退款.md")
+    const a = repo.insertKbChunk(
+      "faq/退款.md",
+      "退款要 7 天",
+      "faq/退款.md",
+      "default"
+    )
     repo.insertKbVec(a, new Float32Array([1, 0, 0]))
-    const b = repo.insertKbChunk("faq/退款.md", "整单退", "faq/退款.md")
+    const b = repo.insertKbChunk(
+      "faq/退款.md",
+      "整单退",
+      "faq/退款.md",
+      "default"
+    )
     repo.insertKbVec(b, new Float32Array([0, 1, 0]))
-    repo.insertKbChunk("intro.md", "简介", "intro.md") // 只 chunk 无向量
+    repo.insertKbChunk("intro.md", "简介", "intro.md", "default") // 只 chunk 无向量
 
     expect(repo.kbTotals()).toEqual({ chunks: 3, vecs: 2 })
     expect(repo.kbDocStats()).toEqual([
-      { doc: "faq/退款.md", chunks: 2 },
-      { doc: "intro.md", chunks: 1 },
+      { namespace: "default", doc: "faq/退款.md", chunks: 2 },
+      { namespace: "default", doc: "intro.md", chunks: 1 },
     ])
     const chunks = repo.kbChunksByDoc("faq/退款.md")
     expect(chunks.map((c) => c.content)).toEqual(["退款要 7 天", "整单退"])
@@ -379,19 +393,22 @@ describe("Repo reflection stats", () => {
     const good = repo.insertKbChunk(
       "human-reflection",
       "退款 7 天到账",
-      "human-reflection:qq:100:1700"
+      "human-reflection:qq:100:1700",
+      "default"
     )
     const legacy = repo.insertKbChunk(
       "human-reflection",
       "旧格式",
-      "human-reflection:100:1600"
+      "human-reflection:100:1600",
+      "default"
     )
     const bad = repo.insertKbChunk(
       "human-reflection",
       "无来源格式",
-      "human-reflection"
+      "human-reflection",
+      "default"
     )
-    repo.insertKbChunk("faq/x.md", "普通文档", "faq/x.md")
+    repo.insertKbChunk("faq/x.md", "普通文档", "faq/x.md", "default")
     const es = repo.reflectionEntries()
     expect(es.length).toBe(3)
     const g = es.find((e) => e.id === good)!
@@ -415,15 +432,17 @@ describe("searchBaseKb", () => {
       "faq/x.md",
       "基础文档内容",
       "faq/x.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertKbEntry(
       "human-reflection",
       "反思内容",
       "human-reflection:qq:100:1",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
-    const hits = repo.searchBaseKb(new Float32Array([1, 0, 0]), 5)
+    const hits = repo.searchBaseKb(new Float32Array([1, 0, 0]), 5, "default")
     expect(hits).toHaveLength(1)
     expect(hits[0].content).toBe("基础文档内容")
   })
@@ -436,11 +455,12 @@ describe("searchBaseKb", () => {
         "human-reflection",
         `反思${i}`,
         `human-reflection:qq:1:${i}`,
-        vec()
+        vec(),
+        "default"
       )
     for (let i = 0; i < 3; i++)
-      repo.insertKbEntry("faq/f.md", `基础${i}`, "faq/f.md", vec())
-    const hits = repo.searchBaseKb(vec(), 3)
+      repo.insertKbEntry("faq/f.md", `基础${i}`, "faq/f.md", vec(), "default")
+    const hits = repo.searchBaseKb(vec(), 3, "default")
     expect(hits).toHaveLength(3)
     expect(hits.every((h) => h.content.startsWith("基础"))).toBe(true)
   })
@@ -450,32 +470,37 @@ describe("replaceReflectionEntries", () => {
   const vec = () => new Float32Array([1, 0, 0])
 
   it("删旧 human-reflection + 插新,不动基础文档,向量数一致", () => {
-    repo.insertKbEntry("faq/x.md", "基础", "faq/x.md", vec())
+    repo.insertKbEntry("faq/x.md", "基础", "faq/x.md", vec(), "default")
     repo.insertKbEntry(
       "human-reflection",
       "旧1",
       "human-reflection:qq:100:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertKbEntry(
       "human-reflection",
       "旧2",
       "human-reflection:qq:100:2",
-      vec()
+      vec(),
+      "default"
     )
     const oldIds = repo.reflectionEntries().map((r) => r.id)
     repo.replaceReflectionEntries(
       oldIds,
       [{ content: "新条", embedding: vec() }],
-      12345
+      12345,
+      "default"
     )
     const refs = repo.reflectionEntries()
     expect(refs).toHaveLength(1)
     expect(refs[0].content).toBe("新条")
-    expect(refs[0].channel).toBe("qq")
-    expect(refs[0].chatId).toBe("0")
+    // 整理后条目无单一来源 chat;ts 与分区必须保留
+    expect(refs[0].channel).toBeNull()
+    expect(refs[0].chatId).toBeNull()
     expect(refs[0].ts).toBe(12345)
-    expect(repo.searchBaseKb(vec(), 5)).toHaveLength(1)
+    expect(refs[0].namespace).toBe("default")
+    expect(repo.searchBaseKb(vec(), 5, "default")).toHaveLength(1)
     const t = repo.kbTotals()
     expect(t.chunks).toBe(t.vecs)
   })
@@ -485,13 +510,15 @@ describe("replaceReflectionEntries", () => {
       "human-reflection",
       "旧1",
       "human-reflection:qq:100:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertKbEntry(
       "human-reflection",
       "旧2",
       "human-reflection:qq:100:2",
-      vec()
+      vec(),
+      "default"
     )
     const snapshot = repo.reflectionEntries().map((r) => r.id) // 2 条
     // 模拟压缩 await 期间 poller 并发插入
@@ -499,12 +526,14 @@ describe("replaceReflectionEntries", () => {
       "human-reflection",
       "并发新增",
       "human-reflection:qq:200:9",
-      vec()
+      vec(),
+      "default"
     )
     repo.replaceReflectionEntries(
       snapshot,
       [{ content: "整理后", embedding: vec() }],
-      500
+      500,
+      "default"
     )
     const contents = repo
       .reflectionEntries()
@@ -1140,19 +1169,22 @@ describe("v6 读侧计数与单行取值", () => {
       "human-reflection",
       "条目一",
       "human-reflection:qq:100:1700000000000",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertKbEntry(
       "human-reflection",
       "条目二",
       "human-reflection:tg:-100abc:1700000000001",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertKbEntry(
       "kb-other",
       "正式文档",
       "docs/kb/x.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
 
     expect(repo.countReflectionEntries()).toBe(2)
@@ -1201,20 +1233,23 @@ describe("沉淀条目摘要与详情", () => {
       "human-reflection",
       longContent,
       "human-reflection:qq:100:1700",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertReflectionMeta(id1, "qq", "100", longQ, longA)
     repo.insertKbEntry(
       "human-reflection",
       "短条目",
       "human-reflection:qq:100:1701",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
     repo.insertKbEntry(
       "kb-other",
       "正式文档不算条目",
       "docs/kb/x.md",
-      new Float32Array([1, 0, 0])
+      new Float32Array([1, 0, 0]),
+      "default"
     )
 
     const sums = repo.reflectionEntrySummaries()

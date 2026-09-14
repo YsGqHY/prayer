@@ -19,7 +19,8 @@ function seedReflection(repo: Repo): number {
     "human-reflection",
     "退款 3 天到账",
     "human-reflection:qq:100:1700",
-    vec()
+    vec(),
+    "default"
   )
 }
 
@@ -62,7 +63,9 @@ describe("applyPromote", () => {
     // 正式文档(doc=rel)入库,检索可命中
     expect(repo.kbDocStats().map((d) => d.doc)).toContain(r.file)
     expect(
-      repo.searchBaseKb(vec(), 5).some((h) => h.content.includes("升格反思"))
+      repo
+        .searchBaseKb(vec(), 5, "default")
+        .some((h) => h.content.includes("升格反思"))
     ).toBe(true)
     // 原反思条目已删:不在 human-reflection 列表
     expect(repo.countReflectionEntries()).toBe(0)

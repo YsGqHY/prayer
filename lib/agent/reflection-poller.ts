@@ -14,7 +14,10 @@ import {
   withTimeoutFn,
 } from "./timeout"
 import type { ChannelId } from "../channels/types"
-import type { ChatRef } from "../channels/enabled-chats"
+import {
+  DEFAULT_KB_NAMESPACE,
+  type ChatRef,
+} from "../channels/enabled-chats"
 
 export interface ReflectionPollerDeps {
   repo: Repo
@@ -35,6 +38,11 @@ export interface ReflectionPollerDeps {
   kbContextK?: number
   embed?: (text: string) => Promise<Float32Array>
   queryFn?: typeof sdkQuery
+  /**
+   * 会话 → 知识库分区解析器(assemble 注入)。沉淀须落进来源会话所属分区,
+   * 去重检索同样限定该分区。缺省恒 default:单租户与既有测试行为不变。
+   */
+  resolveNamespace?: (channel: ChannelId, chatId: string) => string
   /** 本地 embed 硬超时毫秒;<=0 关闭。默认 60s(冷启动加载模型 ~20s+) */
   embedTimeoutMs?: number
   /** LLM(drainQuery)硬超时毫秒;<=0 关闭。默认 180s,防 relay 挂起静默停摆 */
@@ -64,6 +72,7 @@ interface Resolved {
   queryTimeoutMs: number
   now: () => number
   isBypassEnabled: (channel: ChannelId, chatId: string) => boolean
+  resolveNamespace: (channel: ChannelId, chatId: string) => string
 }
 
 // SDK outputFormat.json_schema 强制根对象;items 为候选沉淀条目。
@@ -243,7 +252,8 @@ export async function collectKbContext(
   repo: Repo,
   embed: (text: string) => Promise<Float32Array>,
   texts: string[],
-  k: number
+  k: number,
+  namespace: string
 ): Promise<KbHit[]> {
   const byId = new Map<number, KbHit>()
   const queries = texts.map((t) => t.trim()).filter((t) => t.length >= 4)
@@ -257,7 +267,7 @@ export async function collectKbContext(
     if (!batch.includes(q)) batch.push(q)
   }
   for (const q of batch) {
-    for (const h of repo.searchKb(await embed(q), Math.max(k, 3))) {
+    for (const h of repo.searchKb(await embed(q), Math.max(k, 3), namespace)) {
       const prev = byId.get(h.id)
       if (!prev || h.distance < prev.distance) byId.set(h.id, h)
     }
@@ -287,6 +297,8 @@ function resolve(deps: ReflectionPollerDeps): Resolved {
     queryTimeoutMs: deps.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
     now: deps.now ?? (() => Date.now()),
     isBypassEnabled: deps.isBypassEnabled ?? (() => true),
+    resolveNamespace:
+      deps.resolveNamespace ?? (() => DEFAULT_KB_NAMESPACE),
   }
 }
 
@@ -300,6 +312,8 @@ async function scanOnce(d: Resolved): Promise<void> {
     if (!enabled.has(`${channel}:${chatId}`)) continue // 生效会话门
     // 旁路降级（TG admins 失败 / Privacy 等）：由 channel.isBypassEnabled 决定
     if (!d.isBypassEnabled(channel as ChannelId, chatId)) continue
+    // 该会话所属知识库分区:去重检索与沉淀写入都限定在此,不跨租户
+    const namespace = d.resolveNamespace(channel as ChannelId, chatId)
     const cursor = d.repo.groupReflectCursor(channel, chatId)
     if (until <= cursor) continue // 该会话已处理到此
     // band 内无新管理发言(旧发言早已处理) → 直接推进跳过,不喂 LLM
@@ -341,7 +355,8 @@ async function scanOnce(d: Resolved): Promise<void> {
         d.repo,
         d.embed,
         probeTexts,
-        d.kbContextK
+        d.kbContextK,
+        namespace
       )
       const kbBlock =
         kbHits.length > 0
@@ -395,16 +410,18 @@ async function scanOnce(d: Resolved): Promise<void> {
       for (const it of items) {
         if (!it.effective || !it.faq.trim()) continue
         const faq = it.faq.trim()
-        // 入库前硬去重:对照全库(含正式文档与历史反思)
+        // 入库前硬去重:对照本分区全库(含正式文档与历史反思);
+        // 跨分区去重会把别的租户已有知识误判成重复而丢弃本条
         const faqVec = await d.embed(faq)
-        const near = d.repo.searchKb(faqVec, d.dupTopK)
+        const near = d.repo.searchKb(faqVec, d.dupTopK, namespace)
         const dup = isDuplicateOfHits(faq, near, d.dupMaxDistance)
         if (dup.duplicate) continue
         const chunkId = d.repo.insertKbEntry(
           "human-reflection",
           faq,
           `human-reflection:${channel}:${chatId}:${d.now()}`,
-          faqVec
+          faqVec,
+          namespace
         )
         // 落来源问答(供 web 追溯这条沉淀从哪次人工问答来)
         d.repo.insertReflectionMeta(

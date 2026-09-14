@@ -22,15 +22,15 @@ describe("KB_TOOL_DESC", () => {
 describe("runKbSearch", () => {
   it("检索命中片段文本", async () => {
     const fakeEmbed = async () => new Float32Array([1, 0, 0])
-    const id = repo.insertKbChunk("faq.md", "退货 7 天内", "faq")
+    const id = repo.insertKbChunk("faq.md", "退货 7 天内", "faq", "default")
     repo.insertKbVec(id, new Float32Array([1, 0, 0]))
-    const text = await runKbSearch(repo, fakeEmbed, "退货")
+    const text = await runKbSearch(repo, fakeEmbed, "退货", "default")
     expect(text).toContain("退货 7 天内")
   })
 
   it("无命中返回占位文案", async () => {
     const fakeEmbed = async () => new Float32Array([0, 1, 0])
-    const text = await runKbSearch(repo, fakeEmbed, "无关")
+    const text = await runKbSearch(repo, fakeEmbed, "无关", "default")
     expect(text).toBe("知识库无相关内容。")
   })
 })

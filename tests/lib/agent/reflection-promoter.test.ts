@@ -26,7 +26,8 @@ function seedApproved(n: number) {
       "human-reflection",
       `通用FAQ${i}:完整可复用步骤`,
       `human-reflection:100:${i}`,
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "100", `问${i}`, `答${i}`)
     ids.push(id)
@@ -65,7 +66,8 @@ describe("reflect-promote helpers", () => {
       "human-reflection",
       "退款 7 天到账",
       "human-reflection:1:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "1", "多久退款", "7天")
     const writes: { path: string; body: string }[] = []
@@ -86,7 +88,7 @@ describe("reflect-promote helpers", () => {
     // 原反思 chunk 已物理删除:不再出现在 reflectionEntries,也不在 searchKb
     expect(repo.reflectionEntries().find((e) => e.id === id)).toBeUndefined()
     // 反思侧不再命中;正式文档命中
-    const hits = repo.searchKb(vec(), 5)
+    const hits = repo.searchKb(vec(), 5, "default")
     expect(hits.some((h) => h.content.includes("退款"))).toBe(true)
     expect(hits.every((h) => h.source !== `human-reflection:1:1` || true)).toBe(
       true
@@ -103,7 +105,8 @@ describe("reflect-promote helpers", () => {
       "human-reflection",
       "faq",
       "human-reflection:1:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "1", "q", "a")
     await applyPromote({
@@ -132,7 +135,8 @@ describe("reflect-promote helpers", () => {
       "human-reflection",
       "坏",
       "human-reflection:1:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(id, "qq", "1", "q", "a")
     repo.setReflectionStatus(id, "rejected")
@@ -271,7 +275,8 @@ describe("runPromote", () => {
       "human-reflection",
       "坏",
       "human-reflection:1:9",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(bad, "qq", "1", "q", "a")
     repo.setReflectionStatus(bad, "rejected")
@@ -279,7 +284,8 @@ describe("runPromote", () => {
       "human-reflection",
       "已升",
       "human-reflection:1:8",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(done, "qq", "1", "q", "a")
     repo.setReflectionStatus(done, "promoted")

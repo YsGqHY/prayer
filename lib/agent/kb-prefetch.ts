@@ -60,7 +60,7 @@ export interface KbPrefetchDeps {
 export type KbPrefetch = (
   query: string,
   sessionKey: string,
-  opts?: { fresh?: boolean }
+  opts: { fresh?: boolean; namespace: string }
 ) => Promise<string>
 
 /**
@@ -164,14 +164,14 @@ export function makeKbPrefetch(deps: KbPrefetchDeps): KbPrefetch {
     const probe = query.trim()
     // 太短(纯 @ / "嗯" / 表情)语义不足以检索,直接跳过,省一次本地推理
     if (probe.length < PROBE_MIN_CHARS) return ""
-    if (opts?.fresh) memo.forget(sessionKey)
+    if (opts.fresh) memo.forget(sessionKey)
     try {
       const hits: KbHit[] = await withTimeout(
         timeoutMs,
         (async () => {
           const vec = await deps.embed(probe.slice(0, PROBE_MAX_CHARS))
-          // searchKb 已 ORDER BY distance,无需再排
-          return deps.repo.searchKb(vec, topK)
+          // searchKb 已 ORDER BY distance,无需再排;namespace 限定本会话分区
+          return deps.repo.searchKb(vec, topK, opts.namespace)
         })()
       )
       const near = hits.filter((h) => h.distance <= maxDistance)

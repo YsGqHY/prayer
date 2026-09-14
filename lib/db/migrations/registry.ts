@@ -7,6 +7,7 @@ import {
   migrateToVersion6,
   migrateToVersion7,
   migrateToVersion8,
+  migrateToVersion9,
   repairVersion2,
 } from "./schema.ts"
 
@@ -56,6 +57,12 @@ export const MIGRATIONS: readonly MigrationStep[] = [
     name: "热点读取索引",
     up: migrateToVersion8,
     repair: migrateToVersion8,
+  },
+  {
+    version: 9,
+    name: "知识库 namespace 分区",
+    up: migrateToVersion9,
+    repair: migrateToVersion9,
   },
 ]
 

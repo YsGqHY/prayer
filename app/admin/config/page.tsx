@@ -19,6 +19,7 @@ import { ErrorState } from "@/components/admin/data-state"
 import { useConfigForm } from "@/components/admin/config/use-config-form"
 import { QqSettings } from "@/components/admin/config/qq-settings"
 import { TgSettings } from "@/components/admin/config/tg-settings"
+import { MiraiSettings } from "@/components/admin/config/mirai-settings"
 import { AdminSettings } from "@/components/admin/config/admin-settings"
 import { ReplySettings } from "@/components/admin/config/reply-settings"
 import { SdkSettings } from "@/components/admin/config/sdk-settings"
@@ -69,6 +70,11 @@ export default function ConfigPage() {
     tgBypassWarn,
     tgChannel,
     tgChatTitle,
+    miraiChannel,
+    miraiClients,
+    addMiraiClient,
+    removeMiraiClient,
+    updateMiraiToken,
     setAdminChannel,
     setAdminChatId,
     adminGroupOptions,
@@ -161,6 +167,15 @@ export default function ConfigPage() {
                 tgBypassWarn={tgBypassWarn}
                 tgChannel={tgChannel}
                 tgChatTitle={tgChatTitle}
+              />
+              <MiraiSettings
+                cfg={cfg}
+                setCfg={setCfg}
+                miraiChannel={miraiChannel}
+                miraiClients={miraiClients}
+                addMiraiClient={addMiraiClient}
+                removeMiraiClient={removeMiraiClient}
+                updateMiraiToken={updateMiraiToken}
               />
             </SettingsGrid>
           </TabsContent>

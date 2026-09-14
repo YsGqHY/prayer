@@ -6,6 +6,7 @@ import { useLive } from "@/components/live-provider"
 import type { AppConfig as Cfg } from "@/lib/config/schema"
 import type { ChatRef } from "@/lib/channels/types"
 import { excludeAdminSurface } from "@/lib/config/chats"
+import { miraiConfigError } from "@/lib/config/mirai"
 
 type ScalarConfigKey = Exclude<
   {
@@ -189,6 +190,11 @@ export function useConfigForm() {
 
   async function save() {
     if (!cfg) return
+    const miraiError = miraiConfigError(cfg, true)
+    if (miraiError) {
+      toast.error(miraiError)
+      return
+    }
     // 管理面校验：已选通道则 chatId 必填
     if (cfg.adminSurface && !cfg.adminSurface.chatId.trim()) {
       toast.error("管理面已选通道但未填会话")
@@ -388,6 +394,48 @@ export function useConfigForm() {
     return null
   }
 
+  const miraiChannel = useMemo(
+    () => status?.channels?.find((c) => c.id === "mirai"),
+    [status?.channels]
+  )
+  /** 接入端列表:[clientId, token] 有序数组,便于表格渲染 */
+  const miraiClients = useMemo(
+    () => Object.entries(cfg?.miraiWsClients ?? {}),
+    [cfg?.miraiWsClients]
+  )
+
+  function addMiraiClient(clientId: string, token: string): string | null {
+    if (!cfg) return "配置未加载"
+    const id = clientId.trim()
+    if (!id) return "clientId 不能为空"
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(id))
+      return "clientId 只能含字母、数字、点、下划线、连字符,最长 64"
+    if (cfg.miraiWsClients?.[id] !== undefined) return "该 clientId 已存在"
+    const t = token.trim()
+    // 8 字符下限:这是对外暴露的凭据,过短等于没有
+    if (t.length < 8) return "token 至少 8 个字符"
+    setCfg({
+      ...cfg,
+      miraiWsClients: { ...(cfg.miraiWsClients ?? {}), [id]: t },
+    })
+    return null
+  }
+
+  function removeMiraiClient(clientId: string) {
+    if (!cfg) return
+    const next = { ...(cfg.miraiWsClients ?? {}) }
+    delete next[clientId]
+    setCfg({ ...cfg, miraiWsClients: next })
+  }
+
+  function updateMiraiToken(clientId: string, token: string) {
+    if (!cfg) return
+    setCfg({
+      ...cfg,
+      miraiWsClients: { ...(cfg.miraiWsClients ?? {}), [clientId]: token },
+    })
+  }
+
   const dirty = Boolean(
     cfg && savedSnapshot && JSON.stringify(cfg) !== savedSnapshot
   )
@@ -417,6 +465,11 @@ export function useConfigForm() {
     tgBypassWarn,
     tgChannel,
     tgChatTitle,
+    miraiChannel,
+    miraiClients,
+    addMiraiClient,
+    removeMiraiClient,
+    updateMiraiToken,
     setAdminChannel,
     setAdminChatId,
     adminGroupOptions,

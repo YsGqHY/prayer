@@ -16,6 +16,25 @@ function configRepo(initial?: string) {
 }
 
 describe("配置读取恢复", () => {
+  it("旧 Mirai 配置保留服务端默认，新增环境种子支持客户端", () => {
+    const old = getConfig(configRepo('{"miraiWsPort":3100}'), {})
+    expect(old.miraiWsMode).toBe("server")
+    expect(old.miraiWsPort).toBe(3100)
+    expect(old.miraiWsClientId).toBe("mirai-1")
+    const seeded = getConfig(configRepo(), {
+      MIRAI_WS_ENABLED: "true",
+      MIRAI_WS_MODE: "client",
+      MIRAI_WS_URL: "ws://127.0.0.1:3003",
+      MIRAI_WS_CLIENT_ID: "bridge-test",
+      MIRAI_WS_TOKEN: "test-token",
+    })
+    expect(seeded).toMatchObject({
+      miraiWsMode: "client",
+      miraiWsUrl: "ws://127.0.0.1:3003",
+      miraiWsClientId: "bridge-test",
+      miraiWsToken: "test-token",
+    })
+  })
   it.each(["null", "[]", "42", '"text"', "false", "{"])(
     "非配置 JSON %s 回退种子且可再次读取",
     (raw) => {

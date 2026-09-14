@@ -17,7 +17,8 @@ function seedReflection(content = "原有知识") {
     "human-reflection",
     content,
     "human-reflection:tg:-100:1000",
-    vector()
+    vector(),
+    "default"
   )
   repo.insertReflectionMeta(id, "tg", "-100", "原问题", "原答案")
   return id
@@ -75,14 +76,15 @@ describe("跨领域事务", () => {
         "faq.md",
         "知识",
         "faq.md",
-        vector()
+        vector(),
+        "default"
       )
       repo.reflection.setGroupReflectCursor("tg", "-100", 2000)
       return { ticket, id }
     })
     expect(repo.getTicket(result.ticket)?.sessionKey).toBe("qq:100:1")
     expect(repo.sessions.isHumanMode("qq:100:1")).toBe(true)
-    expect(repo.searchKb(vector(), 1)[0].id).toBe(result.id)
+    expect(repo.searchKb(vector(), 1, "default")[0].id).toBe(result.id)
     expect(repo.groupReflectCursor("tg", "-100")).toBe(2000)
     expect(db.inTransaction).toBe(false)
   })
@@ -181,7 +183,8 @@ describe("知识库与反思原子性", () => {
         "bad.md",
         "不应保存",
         "bad.md",
-        new Float32Array([1, 0])
+        new Float32Array([1, 0]),
+        "default"
       )
     ).toThrow()
     expect(snapshot()).toEqual(before)
@@ -197,8 +200,8 @@ describe("知识库与反思原子性", () => {
   })
 
   it("删除文档正文失败时，恢复此前删除的全部向量", () => {
-    repo.insertKbEntry("faq.md", "甲", "faq.md", vector())
-    repo.insertKbEntry("faq.md", "乙", "faq.md", vector())
+    repo.insertKbEntry("faq.md", "甲", "faq.md", vector(), "default")
+    repo.insertKbEntry("faq.md", "乙", "faq.md", vector(), "default")
     const before = snapshot()
     db.exec(`CREATE TEMP TRIGGER fail_chunk_delete BEFORE DELETE ON kb_chunks
       BEGIN SELECT RAISE(ABORT, '正文删除失败'); END`)
@@ -218,6 +221,7 @@ describe("知识库与反思原子性", () => {
           { content: "第二条", embedding: new Float32Array([1]) },
         ],
         2000,
+        "default",
         ["原有知识"],
         ["第一条", "第二条"]
       )
@@ -235,6 +239,7 @@ describe("知识库与反思原子性", () => {
         [id],
         [{ content: "整理后", embedding: vector() }],
         2000,
+        "default",
         ["原有知识"],
         ["整理后"]
       )

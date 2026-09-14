@@ -55,6 +55,7 @@ interface GroupPolicy {
   proactiveEnabled?: boolean
   proactiveSilenceMs?: number
   notifyAdminOnHandoff?: boolean
+  kbNamespace?: string
 }
 
 interface Row {
@@ -76,13 +77,17 @@ interface Row {
     proactiveEnabled: boolean
     proactiveSilenceMs: number
     notifyAdminOnHandoff: boolean
+    kbNamespace: string
   }
+  /** 已生效但未配知识库分区:静默回落 default,需显式提醒 */
+  missingKbNamespace?: boolean
 }
 
 interface Globals {
   proactiveEnabled: boolean
   proactiveSilenceMs: number
   notifyAdminOnHandoff: true
+  kbNamespace: string
 }
 
 interface ActivityData {
@@ -150,6 +155,8 @@ export default function GroupsPage() {
   )
   const [silenceMin, setSilenceMin] = useState("3")
   const [handoffTri, setHandoffTri] = useState<Tri>("inherit")
+  // 知识库分区:空串 = 继承(回落 default)
+  const [kbNamespace, setKbNamespace] = useState("")
 
   // useMemo 固定引用:data 未变时 rows 不变,下游 useMemo 依赖才稳定
   const rows = useMemo(() => data?.groups ?? [], [data?.groups])
@@ -157,6 +164,12 @@ export default function GroupsPage() {
 
   const overrideCount = useMemo(
     () => rows.filter((r) => r.hasOverride).length,
+    [rows]
+  )
+
+  // 已生效但未配分区:静默回落 default,多租户下是跨租户泄漏面
+  const missingNsCount = useMemo(
+    () => rows.filter((r) => r.missingKbNamespace).length,
     [rows]
   )
 
@@ -173,6 +186,7 @@ export default function GroupsPage() {
       )
     }
     setHandoffTri(triFrom(r.policy.notifyAdminOnHandoff))
+    setKbNamespace(r.policy.kbNamespace ?? "")
   }
 
   async function toggle(row: Row, enable: boolean) {
@@ -235,6 +249,15 @@ export default function GroupsPage() {
       }
       const nh = triToBool(handoffTri)
       if (nh !== undefined) policy.notifyAdminOnHandoff = nh
+      const ns = kbNamespace.trim()
+      if (ns) {
+        // 分区名同时是 docs/kb 下的目录名,限制字符避免路径穿越与跨平台问题
+        if (!/^[A-Za-z0-9._-]{1,64}$/.test(ns)) {
+          toast.error("分区名只能含字母、数字、点、下划线、连字符,最长 64")
+          return
+        }
+        policy.kbNamespace = ns
+      }
 
       const groupPolicies =
         Object.keys(policy).length === 0
@@ -290,7 +313,7 @@ export default function GroupsPage() {
     <PageShell>
       <PageHeader
         title="生效会话"
-        description="按会话开关机器人应答，并覆盖主动补位 / 转人工通知策略；未覆盖的项跟随全局，管理群只处理 !reset / !resume，不参与客服问答。"
+        description="按会话开关机器人应答，并覆盖主动补位 / 转人工通知 / 知识库分区；未覆盖的项跟随全局，管理群只处理 !reset / !resume，不参与客服问答。"
       />
 
       {globals && (
@@ -316,6 +339,14 @@ export default function GroupsPage() {
               value: overrideCount,
               hint: "覆盖了全局默认的会话数量。",
             },
+            {
+              label: "未配知识库分区",
+              value: missingNsCount,
+              hint:
+                missingNsCount > 0
+                  ? "这些生效会话正在读写 default 分区(含存量语料);多租户部署应逐个显式配置。"
+                  : "全部生效会话均已显式指定知识库分区。",
+            },
           ]}
         />
       )}
@@ -330,7 +361,7 @@ export default function GroupsPage() {
           emptyDescription="生效会话有消息后会出现在这里。也可先在配置页勾选生效会话。"
           skeleton={<Skeleton className="h-40 w-full" />}
         >
-          <TableShell minWidth="min-w-[880px]">
+          <TableShell minWidth="min-w-[1000px]">
             <TableHeader>
               <TableRow>
                 <TableHead>会话</TableHead>
@@ -338,6 +369,7 @@ export default function GroupsPage() {
                 <TableHead>主动补位</TableHead>
                 <TableHead>静默</TableHead>
                 <TableHead>转人工通知</TableHead>
+                <TableHead>知识库分区</TableHead>
                 <TableHead className="text-right">消息量</TableHead>
                 <TableHead>最近活动</TableHead>
                 <TableHead className="w-12 text-right">操作</TableHead>
@@ -436,6 +468,30 @@ export default function GroupsPage() {
                         {r.policy.notifyAdminOnHandoff !== undefined && (
                           <span className="text-[10px] text-muted-foreground">
                             覆盖
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {r.isAdmin ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <Badge
+                          variant={
+                            r.missingKbNamespace ? "secondary" : "outline"
+                          }
+                          className="font-mono text-[11px]"
+                        >
+                          {r.effective.kbNamespace}
+                        </Badge>
+                        {r.missingKbNamespace && (
+                          <span
+                            className="text-[10px] text-muted-foreground"
+                            title="未显式配置,回落 default 分区(含存量语料)"
+                          >
+                            未配置
                           </span>
                         )}
                       </div>
@@ -601,6 +657,28 @@ export default function GroupsPage() {
                 </Select>
                 <FieldDescription>
                   仅控制转人工时是否向管理面发消息;会话仍会进入人工接待。
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel>知识库分区</FieldLabel>
+                <Input
+                  value={kbNamespace}
+                  placeholder={`留空跟随默认(${globals?.kbNamespace ?? "default"})`}
+                  onChange={(e) => setKbNamespace(e.target.value)}
+                />
+                <FieldDescription>
+                  该会话只检索本分区的知识,沉淀也只写回本分区。对应
+                  <code> docs/kb/&lt;分区&gt;/ </code>
+                  目录,多个会话填同一值即共用一份知识库。
+                  {editing?.missingKbNamespace ? (
+                    <>
+                      <br />
+                      当前未配置,该会话正在读写
+                      <code> default </code>
+                      分区(含存量语料)。多租户部署请显式填写。
+                    </>
+                  ) : null}
                 </FieldDescription>
               </Field>
             </FieldGroup>

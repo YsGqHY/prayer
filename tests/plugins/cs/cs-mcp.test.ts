@@ -7,10 +7,10 @@ import { KB_SEARCH_SQL } from "@/lib/tools/kb"
 // 本组验证:插件路径与 repo.searchKb 行为一致——驳回/升格条目不外漏。
 const vec = () => new Float32Array([1, 0, 0])
 
-function rowsFor(db: ReturnType<typeof openDb>, k = 10) {
+function rowsFor(db: ReturnType<typeof openDb>, k = 10, namespace = "default") {
   const stmt = db.prepare(KB_SEARCH_SQL)
   return (q: Float32Array) =>
-    stmt.all(Buffer.from(q.buffer), k) as {
+    stmt.all(Buffer.from(q.buffer), k, namespace) as {
       id: number
       content: string
       distance: number
@@ -22,19 +22,27 @@ describe("cs-mcp KB_SEARCH_SQL(插件路径检索过滤)", () => {
     const db = openDb(":memory:", 3)
     const repo = new Repo(db)
 
-    const base = repo.insertKbEntry("faq/x.md", "基础文档", "faq/x.md", vec())
+    const base = repo.insertKbEntry(
+      "faq/x.md",
+      "基础文档",
+      "faq/x.md",
+      vec(),
+      "default"
+    )
     const ok = repo.insertKbEntry(
       "human-reflection",
       "已入库反思",
       "human-reflection:qq:1:1",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(ok, "qq", "1", "q", "a")
     const bad = repo.insertKbEntry(
       "human-reflection",
       "已驳回反思",
       "human-reflection:qq:1:2",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(bad, "qq", "1", "q2", "a2")
     repo.setReflectionStatus(bad, "rejected")
@@ -42,7 +50,8 @@ describe("cs-mcp KB_SEARCH_SQL(插件路径检索过滤)", () => {
       "human-reflection",
       "已升格反思",
       "human-reflection:qq:1:3",
-      vec()
+      vec(),
+      "default"
     )
     repo.insertReflectionMeta(promo, "qq", "1", "q3", "a3")
     repo.setReflectionStatus(promo, "promoted")
@@ -56,7 +65,7 @@ describe("cs-mcp KB_SEARCH_SQL(插件路径检索过滤)", () => {
     expect(pluginContents).not.toContain("已升格反思")
 
     // repo 路径:与插件路径逐行一致(同一常量,防再漂移)
-    const repoHits = repo.searchKb(vec(), 10)
+    const repoHits = repo.searchKb(vec(), 10, "default")
     expect(pluginHits.map((h) => h.id)).toEqual(repoHits.map((h) => h.id))
     expect(base).toBeGreaterThan(0)
     db.close()

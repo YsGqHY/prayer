@@ -49,6 +49,11 @@ export interface ReflectionEntry {
   question: string | null
   answer: string | null
   status: ReflectionStatus
+  /**
+   * 所属知识库分区。直接取 kb_chunks.namespace 列,不从 source 解析
+   * —— 整理后条目的 source 不带真实来源 chat(见 replaceReflectionEntries)。
+   */
+  namespace: string
 }
 export interface ReflectionSummary extends ReflectionEntry {
   contentLen: number

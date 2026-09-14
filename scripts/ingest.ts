@@ -3,6 +3,7 @@ import { join, sep } from "node:path"
 import { openDb } from "../lib/db/index.ts"
 import { Repo } from "../lib/db/repo.ts"
 import { embed } from "../lib/tools/embed.ts"
+import { namespaceOfRel } from "../lib/kb-path.ts"
 
 export function chunkText(text: string, maxLen = 500): string[] {
   const paras = text
@@ -26,6 +27,8 @@ export interface IngestResult {
 
 // 只存在于 DB、磁盘无对应文件的 doc(人工反思沉淀),prune 时不得误删
 const DB_ONLY_DOCS = new Set(["human-reflection"])
+
+
 
 // 进程级互斥:pnpm ingest 与 POST /api/kb/ingest 并发时,两个循环对同一 doc
 // 交错 delete/insert 会混入双方 chunk;共享这一把锁串行化(sharedDb 同款 globalThis 模式)
@@ -61,18 +64,24 @@ export async function runIngest(
       const withVec: { content: string; embedding: Float32Array }[] = []
       for (const c of chunks)
         withVec.push({ content: c, embedding: await embed(c) })
+      const ns = namespaceOfRel(f)
       repo.transaction(() => {
-        // 先清该 doc 旧分块再写入,保证「重建 embedding」幂等;否则每次重建叠加重复 chunk
-        repo.deleteKbDoc(f)
+        // 先清该 doc 旧分块再写入,保证「重建 embedding」幂等;否则每次重建叠加重复 chunk。
+        // 按 (namespace, doc) 限定:不同分区可有同名 doc,不带分区会连带删掉别人的
+        repo.deleteKbDoc(f, ns)
         for (const { content: c, embedding } of withVec)
-          repo.insertKbEntry(f, c, f, embedding)
+          repo.insertKbEntry(f, c, f, embedding, ns)
       })
       out.push({ file: f, chunks: chunks.length })
     }
-    // prune:文件已从磁盘删除的 doc 清出索引,避免幽灵检索结果
-    const onDisk = new Set(files)
-    for (const { doc } of repo.kbDocStats()) {
-      if (!onDisk.has(doc) && !DB_ONLY_DOCS.has(doc)) repo.deleteKbDoc(doc)
+    // prune:文件已从磁盘删除的 doc 清出索引,避免幽灵检索结果。
+    // 按 (namespace, doc) 联合判定 —— doc 名在不同分区可重复,只看 doc 会误删
+    const onDisk = new Set(files.map((f) => `${namespaceOfRel(f)}\u0000${f}`))
+    for (const { namespace, doc } of repo.kbDocStats()) {
+      if (DB_ONLY_DOCS.has(doc)) continue
+      if (!onDisk.has(`${namespace}\u0000${doc}`)) {
+        repo.deleteKbDoc(doc, namespace)
+      }
     }
     return out
   })

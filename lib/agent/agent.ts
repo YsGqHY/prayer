@@ -11,6 +11,7 @@ import { toolStats, KB_PREFETCH_TOOL, KB_GROUNDED_TOOL } from "../tool-stats"
 import { logger } from "../logger"
 import type { ChannelId } from "../channels/types"
 import { resolveBrand, type BrandInput, type BrandProfile } from "../brand"
+import { DEFAULT_KB_NAMESPACE } from "../channels/enabled-chats"
 import { PROBE_MAX_CHARS, type KbPrefetch } from "./kb-prefetch"
 import { sanitizeForModel } from "./sanitize-input"
 
@@ -575,6 +576,7 @@ export class Agent {
     text: string,
     resumeId: string | undefined,
     ctx: ToolContext,
+    namespace: string,
     media?: AgentMedia
   ): Promise<string> {
     if (!this.deps.kbPrefetch || !ctx?.sessionKey) return ""
@@ -582,7 +584,7 @@ export class Agent {
       return await this.deps.kbPrefetch(
         kbProbeText(text, media),
         ctx.sessionKey,
-        { fresh: !resumeId }
+        { fresh: !resumeId, namespace }
       )
     } catch (e) {
       console.warn("[agent] 预检索异常,跳过注入:", e)
@@ -590,13 +592,18 @@ export class Agent {
     }
   }
 
+  /**
+   * 本轮知识库分区。调用方(orchestrator / 主动补位)经 resolveKbNamespace 解析后传入;
+   * 缺省回落 default,与 resolveKbNamespace 的漏配语义一致。
+   */
   async run(
     text: string,
     resumeId: string | undefined,
     ctx: ToolContext,
-    media?: AgentMedia
+    media?: AgentMedia,
+    namespace: string = DEFAULT_KB_NAMESPACE
   ): Promise<AgentResult> {
-    const kbBlock = await this.prefetchKb(text, resumeId, ctx, media)
+    const kbBlock = await this.prefetchKb(text, resumeId, ctx, namespace, media)
     // 本 run 的工具调用计数(工具名 → 次数),在 finally 一次性提交给 toolStats
     const toolCalls = new Map<string, number>()
     let sessionId: string | undefined = resumeId
@@ -612,6 +619,10 @@ export class Agent {
         prompt: buildPrompt(text, media, kbBlock),
         options: agentQueryOptions({
           abortController,
+          // 每次 query 都 spawn 全新 CLI 子进程,故 env 是 per-run 的:cs 插件的
+          // kb_search MCP server 由此拿到本轮分区(同 DB_PATH 的既有模式)。
+          // 不做成工具参数——模型可能传错或被提示注入诱导跨租户检索。
+          env: { ...sdkEnv(), KB_NAMESPACE: namespace },
           // 模型由 CLAUDE_CONFIG_DIR 内配置决定,不在此覆盖
           // 用完整自定义 system prompt(不套 claude_code preset):preset 的编码助手人格会
           // 干扰视觉输入(实测带图时模型回"无图"),且本就需靠 prompt 抹掉编码设定 —— 直接替换更干净。

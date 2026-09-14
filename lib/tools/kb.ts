@@ -21,16 +21,18 @@ export const KB_SEARCH_SQL = `SELECT c.id, c.content, c.source, v.distance
      JOIN kb_chunks c ON c.id = v.chunk_id
      LEFT JOIN reflection_meta m ON m.chunk_id = c.id
      WHERE v.embedding MATCH ? AND k = ?
+       AND c.namespace = ?
        AND COALESCE(m.status, 'approved') NOT IN ('rejected', 'promoted')
      ORDER BY v.distance`
 
 export async function runKbSearch(
   repo: Pick<KnowledgeRepository, "searchKb">,
   embed: EmbedFn,
-  query: string
+  query: string,
+  namespace: string
 ): Promise<string> {
   const vec = await embed(query)
-  const hits = repo.searchKb(vec, 5)
+  const hits = repo.searchKb(vec, 5, namespace)
   return hits.length
     ? hits.map((h, i) => `[${i + 1}] ${h.content}`).join("\n")
     : "知识库无相关内容。"

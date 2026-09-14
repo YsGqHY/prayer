@@ -1,7 +1,7 @@
-import type { ChannelId } from "./types"
+import { CHANNEL_IDS, type ChannelId } from "./types"
 
-/** 已知通道集合；解析时校验首段 */
-const CHANNELS = new Set<string>(["qq", "tg", "discord"])
+/** 已知通道集合；解析时校验首段。直接由 CHANNEL_IDS 派生,避免两处漂移 */
+const CHANNELS = new Set<string>(CHANNEL_IDS)
 
 export interface ParsedSessionKey {
   channel: ChannelId

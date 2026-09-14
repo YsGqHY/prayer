@@ -64,12 +64,16 @@ async function main(): Promise<void> {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true })
   sqliteVec.load(db)
 
+  // 本轮知识库分区:父进程 agent.run 按会话解析后经 env 注入(见 lib/agent/agent.ts)。
+  // 模型无从伪造;缺失时回落 default,与 resolveKbNamespace 的漏配语义一致。
+  const namespace = process.env.KB_NAMESPACE?.trim() || "default"
+
   // 与 repo.searchKb 共用 KB_SEARCH_SQL(kb.ts 唯一事实源):此前内联副本
   // 漏了 reflection_meta 过滤,管理员驳回的知识仍会经 kb_search 漏给用户
   const stmt = db.prepare(KB_SEARCH_SQL)
   const repo = {
-    searchKb: (query: Float32Array, k: number) =>
-      stmt.all(Buffer.from(query.buffer), k),
+    searchKb: (query: Float32Array, k: number, ns: string) =>
+      stmt.all(Buffer.from(query.buffer), k, ns),
   }
 
   server.registerTool(
@@ -89,7 +93,7 @@ async function main(): Promise<void> {
       content: [
         {
           type: "text" as const,
-          text: await runKbSearch(repo as never, embed, query),
+          text: await runKbSearch(repo as never, embed, query, namespace),
         },
       ],
     })

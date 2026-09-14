@@ -33,6 +33,9 @@ function baseCfg(over: Partial<AppConfig> = {}): AppConfig {
     kbPrefetchMaxDistance: 1.0,
     enabledChats: [],
     telegramBotToken: "",
+    miraiWsEnabled: false,
+    miraiWsPort: 3002,
+    miraiWsClients: {},
     proactiveEnabled: false,
     proactiveScanMs: 60000,
     proactiveSilenceMs: 180000,
@@ -160,8 +163,12 @@ describe("createChannels", () => {
     ).toThrow(/factory-boom/)
   })
 
-  it("DEFAULT_CHANNEL_FACTORIES 含 qq/tg", () => {
-    expect(DEFAULT_CHANNEL_FACTORIES.map((e) => e.id)).toEqual(["qq", "tg"])
+  it("DEFAULT_CHANNEL_FACTORIES 含 qq/tg/mirai", () => {
+    expect(DEFAULT_CHANNEL_FACTORIES.map((e) => e.id)).toEqual([
+      "qq",
+      "tg",
+      "mirai",
+    ])
   })
 
   it("默认 qq 工厂在无 override 时用 onebotWsUrl 判定", () => {

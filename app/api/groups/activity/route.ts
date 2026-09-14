@@ -2,9 +2,11 @@ import { NextResponse } from "next/server"
 import { getAppContext } from "@/lib/app-context"
 import type { GroupPolicy } from "@/lib/config-store"
 import {
+  DEFAULT_KB_NAMESPACE,
   getGroupPolicy,
   listEnabledChats,
   policyKey,
+  resolveKbNamespace,
 } from "@/lib/channels/enabled-chats"
 import type { ChannelId } from "@/lib/channels/types"
 import { ok, fail } from "@/lib/api"
@@ -83,7 +85,14 @@ export async function GET(): Promise<NextResponse> {
               policy.notifyAdminOnHandoff !== undefined
                 ? policy.notifyAdminOnHandoff
                 : true,
+            kbNamespace: resolveKbNamespace(cfg, channel, chatId),
           },
+          // 已生效但未配分区 → 静默回落 default(跨租户泄漏面),前端显式告警。
+          // 管理面不进客服流程、不检索知识库,不参与告警。
+          missingKbNamespace:
+            !isAdmin &&
+            enabledSet.has(chatKey(channel, chatId)) &&
+            !policy.kbNamespace?.trim(),
         }
       })
       .sort(
@@ -101,6 +110,8 @@ export async function GET(): Promise<NextResponse> {
           proactiveSilenceMs: cfg.proactiveSilenceMs,
           // 全局无此字段,默认 true;按群可关
           notifyAdminOnHandoff: true as const,
+          // 未配 kbNamespace 的会话回落到此分区
+          kbNamespace: DEFAULT_KB_NAMESPACE,
         },
       })
     )

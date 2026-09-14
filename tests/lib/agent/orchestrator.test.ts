@@ -64,7 +64,8 @@ describe("orchestrator", () => {
         chatId: "1",
         userId: "2",
       }),
-      expect.anything()
+      expect.anything(),
+      "default"
     )
   })
 

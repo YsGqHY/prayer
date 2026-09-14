@@ -19,4 +19,5 @@ export {
   ensureSeenMessagesCreatedIndex,
   migrateLegacySessionKeys,
   ensureHotReadIndexes,
+  ensureKbNamespace,
 } from "./schema.ts"

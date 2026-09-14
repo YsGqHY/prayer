@@ -6,6 +6,7 @@ function currentConfig() {
   return appConfigSchema.parse({
     onebotAccessToken: "onebot-secret",
     telegramBotToken: "telegram-secret",
+    miraiWsToken: "mirai-secret",
     supportUrl: "https://example.com/support",
     groupPolicies: {
       "qq:100": { proactiveEnabled: true, proactiveSilenceMs: 60_000 },
@@ -46,9 +47,11 @@ describe("配置局部更新", () => {
     const patch = mergeConfigPatch(current, {
       onebotAccessToken: value,
       telegramBotToken: value,
+      miraiWsToken: value,
     })
     expect(patch.onebotAccessToken).toBe(current.onebotAccessToken)
     expect(patch.telegramBotToken).toBe(current.telegramBotToken)
+    expect(patch.miraiWsToken).toBe(current.miraiWsToken)
   })
 
   it("新密钥替换旧值；省略密钥不产生补丁", () => {
@@ -95,6 +98,10 @@ describe("配置局部更新", () => {
     { ackEnabled: "false" },
     { topicScanMs: "5000" },
     { botQQ: 1.5 },
+    { miraiWsMode: "auto" },
+    { miraiWsPort: 0 },
+    { miraiWsPort: 65536 },
+    { miraiWsPort: 1.5 },
     { usageBudgetUsd: Infinity },
   ])("拒绝错误类型或非有限数：%j", (input) => {
     expect(configPatchSchema.safeParse(input).success).toBe(false)

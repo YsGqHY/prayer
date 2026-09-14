@@ -54,6 +54,8 @@ type ReflectionEntry = {
   id: number
   content: string
   status: string
+  /** 所属知识库分区:整理按分区独立进行,不跨分区合并 */
+  namespace: string
 }
 
 // SDK outputFormat.json_schema 强制根对象(非裸数组);items 为整理后 FAQ 列表。
@@ -205,16 +207,19 @@ async function compactOneBatch(
   d: Resolved,
   batch: ReflectionEntry[],
   batchIndex: number,
-  batchTotal: number
+  batchTotal: number,
+  namespace: string
 ): Promise<string[] | null> {
   // 1 条无法合并,原样返回,省一次 LLM
   if (batch.length < 2) return batch.map((e) => e.content)
 
   const ctx = new Map<number, string>()
   for (const e of batch) {
+    // 权威上下文限定同分区:跨分区取文档会把别的租户事实当成矛盾校验依据
     for (const h of d.repo.searchBaseKb(
       await d.embed(e.content),
-      d.baseContextK
+      d.baseContextK,
+      namespace
     )) {
       ctx.set(h.id, h.content)
     }
@@ -273,15 +278,34 @@ async function compactOneBatch(
 }
 
 // 执行一轮压缩整理,供测试直驱。旁路:异常保留旧库并 emit error,不抛。
-// 超过 batchSize 时分批调 LLM,各批结果汇总后一次性替换;单批失败则该批保留原文,其它批仍生效。
+// 知识库按 namespace 分区,故先按分区分组、逐组独立整理(minEntries 按组判定):
+// 跨分区合并会把不同租户的知识揉成一条。游标(compactAt)仍是全局单份,一次 tick 走完所有分区。
 export async function runCompact(deps: ReflectionCompactorDeps): Promise<void> {
   const d = resolve(deps)
   // 只整理已入库未升格/未驳回的条目;已升格条目保留作审计,不参与整库替换
-  const entries = d.repo
+  const approved = d.repo
     .reflectionEntries()
     .filter((e) => e.status === "approved") as ReflectionEntry[]
-  if (entries.length < d.minEntries) return
 
+  const byNamespace = new Map<string, ReflectionEntry[]>()
+  for (const e of approved) {
+    const list = byNamespace.get(e.namespace)
+    if (list) list.push(e)
+    else byNamespace.set(e.namespace, [e])
+  }
+  for (const [namespace, entries] of byNamespace) {
+    if (entries.length < d.minEntries) continue
+    await compactNamespace(d, namespace, entries)
+  }
+}
+
+// 单分区整理:超过 batchSize 时分批调 LLM,各批结果汇总后一次性替换该分区;
+// 单批失败则该批保留原文,其它批仍生效。
+async function compactNamespace(
+  d: Resolved,
+  namespace: string,
+  entries: ReflectionEntry[]
+): Promise<void> {
   try {
     const batches = partitionBatches(entries, d.batchSize)
     const allFaqs: string[] = []
@@ -290,7 +314,7 @@ export async function runCompact(deps: ReflectionCompactorDeps): Promise<void> {
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i]
-      const faqs = await compactOneBatch(d, batch, i, batches.length)
+      const faqs = await compactOneBatch(d, batch, i, batches.length, namespace)
       if (faqs == null) {
         // 该批校验失败:保留原文,继续其它批
         allFaqs.push(...batch.map((e) => e.content))
@@ -306,7 +330,7 @@ export async function runCompact(deps: ReflectionCompactorDeps): Promise<void> {
     if (!anyLlmOk && anyBatchFailed) {
       logger.log(
         "warn",
-        `[reflection-compact] 全部 ${batches.length} 批均失败,保留旧库`
+        `[reflection-compact] [${namespace}] 全部 ${batches.length} 批均失败,保留旧库`
       )
       return
     }
@@ -324,6 +348,7 @@ export async function runCompact(deps: ReflectionCompactorDeps): Promise<void> {
       entries.map((e) => e.id),
       withVec,
       d.now(),
+      namespace,
       entries.map((e) => e.content),
       allFaqs
     )
@@ -331,14 +356,14 @@ export async function runCompact(deps: ReflectionCompactorDeps): Promise<void> {
     const batchNote = batches.length > 1 ? `(分 ${batches.length} 批)` : ""
     logger.log(
       "info",
-      `[reflection-compact] ${entries.length} → ${allFaqs.length} 条${batchNote}`
+      `[reflection-compact] [${namespace}] ${entries.length} → ${allFaqs.length} 条${batchNote}`
     )
 
     if (d.notifyAdmin && d.adminSurface) {
       bus.emit("action.send", {
         channel: d.adminSurface.channel,
         chatId: d.adminSurface.chatId,
-        text: `反思整理:${entries.length} → ${allFaqs.length} 条${batchNote}`,
+        text: `反思整理[${namespace}]:${entries.length} → ${allFaqs.length} 条${batchNote}`,
       })
     }
   } catch (err) {

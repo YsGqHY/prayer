@@ -45,27 +45,27 @@ describe("formatKbBlock", () => {
 describe("makeKbPrefetch", () => {
   it("命中 → 拼出带编号的注入块", async () => {
     const { prefetch } = setup([hit(1, "怎么注册", 0.3)])
-    const out = await prefetch("怎么注册账号", "qq:1:2")
+    const out = await prefetch("怎么注册账号", "qq:1:2", { namespace: "default" })
     expect(out).toContain("[1] 怎么注册")
     expect(out.startsWith("【知识库检索结果")).toBe(true)
   })
 
   it("超过 maxDistance 的片段被过滤掉", async () => {
     const { prefetch } = setup([hit(1, "近的", 0.3), hit(2, "远的", 1.2)])
-    const out = await prefetch("怎么注册账号", "qq:1:2")
+    const out = await prefetch("怎么注册账号", "qq:1:2", { namespace: "default" })
     expect(out).toContain("近的")
     expect(out).not.toContain("远的")
   })
 
   it("全部超阈 → 空串(不是空块)", async () => {
     const { prefetch } = setup([hit(1, "远的", 1.5)])
-    expect(await prefetch("怎么注册账号", "qq:1:2")).toBe("")
+    expect(await prefetch("怎么注册账号", "qq:1:2", { namespace: "default" })).toBe("")
   })
 
   it("同 sessionKey 二次同 query → 不重复注入", async () => {
     const { prefetch } = setup([hit(1, "怎么注册", 0.3)])
-    expect(await prefetch("怎么注册账号", "s1")).toContain("[1]")
-    expect(await prefetch("怎么注册账号", "s1")).toBe("")
+    expect(await prefetch("怎么注册账号", "s1", { namespace: "default" })).toContain("[1]")
+    expect(await prefetch("怎么注册账号", "s1", { namespace: "default" })).toBe("")
   })
 
   it("只有部分片段是新的时,编号仍从 [1] 起", async () => {
@@ -73,25 +73,30 @@ describe("makeKbPrefetch", () => {
     const embed = vi.fn(async () => new Float32Array([1, 0, 0]))
     const searchKb = vi.fn(() => hits)
     const prefetch = makeKbPrefetch({ repo: { searchKb } as never, embed })
-    await prefetch("怎么注册账号", "s1")
+    await prefetch("怎么注册账号", "s1", { namespace: "default" })
     hits.push(hit(2, "新片段", 0.4))
-    const out = await prefetch("怎么注册账号", "s1")
+    const out = await prefetch("怎么注册账号", "s1", { namespace: "default" })
     expect(out).toContain("[1] 新片段")
     expect(out).not.toContain("旧片段")
   })
 
   it("不同 sessionKey 互不影响", async () => {
     const { prefetch } = setup([hit(1, "怎么注册", 0.3)])
-    expect(await prefetch("怎么注册账号", "s1")).toContain("[1]")
-    expect(await prefetch("怎么注册账号", "s2")).toContain("[1]")
+    expect(await prefetch("怎么注册账号", "s1", { namespace: "default" })).toContain("[1]")
+    expect(
+      await prefetch("怎么注册账号", "s2", { namespace: "default" })
+    ).toContain("[1]")
   })
 
   it("fresh:true 清空本会话记忆,重新注入", async () => {
     const { prefetch } = setup([hit(1, "怎么注册", 0.3)])
-    await prefetch("怎么注册账号", "s1")
-    expect(await prefetch("怎么注册账号", "s1", { fresh: true })).toContain(
-      "[1]"
-    )
+    await prefetch("怎么注册账号", "s1", { namespace: "default" })
+    expect(
+      await prefetch("怎么注册账号", "s1", {
+        fresh: true,
+        namespace: "default",
+      })
+    ).toContain("[1]")
   })
 
   it("TTL 过期后重新注入", async () => {
@@ -100,29 +105,29 @@ describe("makeKbPrefetch", () => {
       memoTtlMs: 1000,
       now: () => t,
     })
-    expect(await prefetch("怎么注册账号", "s1")).toContain("[1]")
+    expect(await prefetch("怎么注册账号", "s1", { namespace: "default" })).toContain("[1]")
     t += 2000
-    expect(await prefetch("怎么注册账号", "s1")).toContain("[1]")
+    expect(await prefetch("怎么注册账号", "s1", { namespace: "default" })).toContain("[1]")
   })
 
   it("片段超 maxCharsPerHit → 截断", async () => {
     const { prefetch } = setup([hit(1, "长".repeat(100), 0.3)], {
       maxCharsPerHit: 10,
     })
-    const out = await prefetch("怎么注册账号", "s1")
+    const out = await prefetch("怎么注册账号", "s1", { namespace: "default" })
     expect(out).toContain(`[1] ${"长".repeat(10)}\n`)
   })
 
   it("片段过 sanitizeForModel(防 MiniMax new_sensitive)", async () => {
     const { prefetch } = setup([hit(1, "需要翻墙才能访问", 0.3)])
-    const out = await prefetch("怎么注册账号", "s1")
+    const out = await prefetch("怎么注册账号", "s1", { namespace: "default" })
     expect(out).toContain("[网络]")
     expect(out).not.toContain("翻墙")
   })
 
   it("query 过短 → 直接返回空串且不调 embed", async () => {
     const { prefetch, embed } = setup([hit(1, "怎么注册", 0.3)])
-    expect(await prefetch("嗯", "s1")).toBe("")
+    expect(await prefetch("嗯", "s1", { namespace: "default" })).toBe("")
     expect(embed).not.toHaveBeenCalled()
   })
 
@@ -133,7 +138,7 @@ describe("makeKbPrefetch", () => {
         throw new Error("模型加载失败")
       },
     })
-    await expect(prefetch("怎么注册账号", "s1")).resolves.toBe("")
+    await expect(prefetch("怎么注册账号", "s1", { namespace: "default" })).resolves.toBe("")
   })
 
   it("searchKb 抛错 → fail-open 返回空串", async () => {
@@ -145,7 +150,7 @@ describe("makeKbPrefetch", () => {
       } as never,
       embed: async () => new Float32Array([1, 0, 0]),
     })
-    await expect(prefetch("怎么注册账号", "s1")).resolves.toBe("")
+    await expect(prefetch("怎么注册账号", "s1", { namespace: "default" })).resolves.toBe("")
   })
 
   it("embed 挂起 → 超时后返回空串", async () => {
@@ -154,13 +159,13 @@ describe("makeKbPrefetch", () => {
       embed: () => new Promise<Float32Array>(() => {}),
       timeoutMs: 20,
     })
-    await expect(prefetch("怎么注册账号", "s1")).resolves.toBe("")
+    await expect(prefetch("怎么注册账号", "s1", { namespace: "default" })).resolves.toBe("")
   })
 
   it("searchKb 拿到配置的 topK", async () => {
     const { prefetch, searchKb } = setup([hit(1, "怎么注册", 0.3)], { topK: 3 })
-    await prefetch("怎么注册账号", "s1")
-    expect(searchKb).toHaveBeenCalledWith(expect.anything(), 3)
+    await prefetch("怎么注册账号", "s1", { namespace: "default" })
+    expect(searchKb).toHaveBeenCalledWith(expect.anything(), 3, "default")
   })
 })
 

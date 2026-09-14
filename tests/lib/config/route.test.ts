@@ -38,6 +38,75 @@ function put(body: unknown) {
 }
 
 describe("配置 HTTP 边界", () => {
+  it("客户端模式保存、掩码回传、切回服务端均保留另一侧凭据", async () => {
+    const repo = new Repo(db)
+    const response = await put({
+      miraiWsEnabled: true,
+      miraiWsMode: "client",
+      miraiWsUrl: "ws://127.0.0.1:3003",
+      miraiWsClientId: "mirai-1",
+      miraiWsToken: "client-secret",
+      miraiWsClients: { "mirai-1": "server-secret" },
+    })
+    expect(response.status).toBe(200)
+    const { data } = await response.json()
+    expect(data.miraiWsToken).toBe("••••cret")
+    expect(data.miraiWsClients["mirai-1"]).toBe("••••cret")
+    expect((await put({ ...data, miraiWsMode: "server" })).status).toBe(200)
+    expect(getConfig(repo)).toMatchObject({
+      miraiWsMode: "server",
+      miraiWsToken: "client-secret",
+      miraiWsClients: { "mirai-1": "server-secret" },
+    })
+    expect((await put({ miraiWsMode: "client" })).status).toBe(200)
+    expect(reconfigure.mock.lastCall?.[0].miraiWsToken).toBe("client-secret")
+  })
+
+  it.each([
+    { miraiWsUrl: "https://example.com" },
+    { miraiWsUrl: "ws://user:password@localhost" },
+    { miraiWsUrl: "ws://localhost/#fragment" },
+    { miraiWsUrl: "" },
+    { miraiWsClientId: "bad id" },
+    { miraiWsToken: "tiny" },
+    { miraiWsToken: "line\nbreak" },
+    { miraiWsToken: "••••fake" },
+  ])("客户端非法配置 %j 不写库不重启", async (patch) => {
+    const repo = new Repo(db)
+    const before = repo.getConfigRow("app")
+    const response = await put({
+      miraiWsEnabled: true,
+      miraiWsMode: "client",
+      miraiWsUrl: "ws://127.0.0.1:3003",
+      miraiWsClientId: "mirai-1",
+      miraiWsToken: "valid-token",
+      ...patch,
+    })
+    expect(response.status).toBe(400)
+    expect(repo.getConfigRow("app")).toBe(before)
+    expect(reconfigure).not.toHaveBeenCalled()
+  })
+
+  it("服务端拒绝无凭据与重复 token，关闭通道可保存未完成的客户端草稿", async () => {
+    expect((await put({ miraiWsEnabled: true })).status).toBe(400)
+    expect(
+      (
+        await put({
+          miraiWsEnabled: true,
+          miraiWsClients: { a: "same-token", b: "same-token" },
+        })
+      ).status
+    ).toBe(400)
+    expect(
+      (
+        await put({
+          miraiWsEnabled: false,
+          miraiWsMode: "client",
+          miraiWsUrl: "",
+        })
+      ).status
+    ).toBe(200)
+  })
   it("GET 只返回掩码，数据库保留原密钥", async () => {
     const repo = new Repo(db)
     setConfig(repo, {
