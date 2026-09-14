@@ -9,11 +9,12 @@ import {
   useRef,
   useState,
 } from "react"
-import { DEFAULT_BRAND } from "@/lib/brand"
+import { DEFAULT_BRAND } from "@/lib/core/brand"
+import type { ChannelId } from "@/lib/core/chat/types"
 
 /** 与 RuntimeStatus.channels / ChannelStatus 对齐 */
 export interface ChannelStatusView {
-  id: string
+  id: ChannelId
   connected: boolean
   lastError?: string
   detail?: string
@@ -21,6 +22,7 @@ export interface ChannelStatusView {
 
 export interface Status {
   state: string
+  ready?: boolean
   wsConnected: boolean
   sessionCount: number
   handoffQueue: number
@@ -36,12 +38,20 @@ export interface OverviewMetrics {
   proactive: number
   handoff: number
   error: number
+  operationalErrors: number
   blocked: number
   proactiveSilent: number
   autoResolutionRate: number | null
   proactiveBad: number
   usageCostUsd: number
   usageBudgetUsd: number
+  outbox?: {
+    pending: number
+    sending: number
+    sent: number
+    failed: number
+  }
+  storage?: { dbBytes: number; walBytes: number; shmBytes: number }
 }
 
 export interface Overview {

@@ -1,5 +1,5 @@
-import type { ActionSend } from "../../events"
-import type { Channel, ChannelCapabilities, ChannelStatus } from "../types"
+import type { ActionSend } from "../../core/chat/events"
+import type { Channel, ChannelCapabilities, ChannelStatus } from "../../core/chat/types"
 import { PROTOCOL_VERSION } from "./protocol"
 import { MiraiWsClient, type MiraiClientOpts } from "./client"
 import {

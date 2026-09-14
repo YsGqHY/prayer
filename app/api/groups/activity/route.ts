@@ -1,16 +1,16 @@
 import { NextResponse } from "next/server"
-import { getAppContext } from "@/lib/app-context"
-import type { GroupPolicy } from "@/lib/config-store"
+import { getAppContext } from "@/lib/core/app-context"
+import type { GroupPolicy } from "@/lib/core/config-store"
 import {
   DEFAULT_KB_NAMESPACE,
   getGroupPolicy,
   listEnabledChats,
   policyKey,
   resolveKbNamespace,
-} from "@/lib/channels/enabled-chats"
-import type { ChannelId } from "@/lib/channels/types"
-import { ok, fail } from "@/lib/api"
-import { buildGroupChatStats } from "@/lib/reflect-stats"
+} from "@/lib/core/chat/enabled-chats"
+import type { ChannelId } from "@/lib/core/chat/types"
+import { ok, fail, safeApiError } from "@/lib/core/api"
+import { buildGroupChatStats } from "@/lib/knowledge/reflection/stats"
 
 function chatKey(channel: string, chatId: string): string {
   return `${channel}:${chatId}`
@@ -22,11 +22,13 @@ export async function GET(): Promise<NextResponse> {
     const { cfg, repo } = getAppContext()
 
     const enabled = listEnabledChats(cfg)
-    const enabledSet = new Set(enabled.map((c) => chatKey(c.channel, c.chatId)))
+    const enabledSet = new Set(
+      enabled.map((c) => policyKey(c.channel, c.chatId))
+    )
     const { cursors, msg, sed } = buildGroupChatStats(repo)
     // 管理面:始终列出但不可勾生效(只跑管理命令,不进客服流程)
     const adminKey = cfg.adminSurface
-      ? chatKey(cfg.adminSurface.channel, cfg.adminSurface.chatId)
+      ? policyKey(cfg.adminSurface.channel, cfg.adminSurface.chatId)
       : null
 
     // 含有策略覆盖但尚未产生消息的群也要列出
@@ -43,7 +45,7 @@ export async function GET(): Promise<NextResponse> {
         ids.add(k)
       } else if (/^\d+$/.test(k)) {
         // 旧裸群号 → qq
-        ids.add(chatKey("qq", k))
+        ids.add(policyKey("qq", k))
       }
     }
 
@@ -63,7 +65,7 @@ export async function GET(): Promise<NextResponse> {
           groupId: Number.isFinite(gid) ? gid : 0,
           isAdmin,
           // 管理群与生效会话互斥,永远 false
-          enabled: !isAdmin && enabledSet.has(chatKey(channel, chatId)),
+          enabled: !isAdmin && enabledSet.has(policyKey(channel, chatId)),
           messageCount: msg.get(key)?.count ?? 0,
           lastTs: msg.get(key)?.lastTs ?? 0,
           cursor: cursors.get(key) ?? 0,
@@ -73,18 +75,10 @@ export async function GET(): Promise<NextResponse> {
           policyKey: policyKey(channel, chatId),
           // 生效后的解析值(便于列表一眼看)
           effective: {
-            proactiveEnabled:
-              policy.proactiveEnabled !== undefined
-                ? policy.proactiveEnabled
-                : cfg.proactiveEnabled,
+            proactiveEnabled: policy.proactiveEnabled ?? cfg.proactiveEnabled,
             proactiveSilenceMs:
-              policy.proactiveSilenceMs !== undefined
-                ? policy.proactiveSilenceMs
-                : cfg.proactiveSilenceMs,
-            notifyAdminOnHandoff:
-              policy.notifyAdminOnHandoff !== undefined
-                ? policy.notifyAdminOnHandoff
-                : true,
+              policy.proactiveSilenceMs ?? cfg.proactiveSilenceMs,
+            notifyAdminOnHandoff: policy.notifyAdminOnHandoff ?? true,
             kbNamespace: resolveKbNamespace(cfg, channel, chatId),
           },
           // 已生效但未配分区 → 静默回落 default(跨租户泄漏面),前端显式告警。
@@ -116,9 +110,6 @@ export async function GET(): Promise<NextResponse> {
       })
     )
   } catch (err) {
-    return NextResponse.json(
-      fail(err instanceof Error ? err.message : String(err)),
-      { status: 500 }
-    )
+    return NextResponse.json(fail(safeApiError(err)), { status: 500 })
   }
 }

@@ -1,0 +1,244 @@
+import type { Repo } from "../core/db/repo"
+import type { Agent } from "./agent"
+import { SessionStore } from "./session"
+import { registerGateway } from "./gateway"
+import { registerOrchestrator } from "./orchestrator"
+import { makeIntentClassifier } from "./intent"
+import { registerReplyMapper } from "./reply-mapper"
+import { registerMessageBuffer } from "./message-buffer"
+import { registerTopicPoller } from "./pollers/topic"
+import { registerReflectionPoller } from "../knowledge/reflection/poller"
+import { registerReflectionCompactor } from "../knowledge/reflection/compactor"
+import { registerReflectionPromoter } from "../knowledge/reflection/promoter"
+import { registerErrorHandler } from "./error-handler"
+import { registerUnansweredPoller } from "./pollers/unanswered"
+import { makeAnswerabilityClassifier } from "./answerability"
+import { registerHandoffHandler } from "./handoff-handler"
+import { registerResolutionRecorder } from "./resolution-recorder"
+import { registerDeliveryRecorder } from "./delivery-recorder"
+import type { GroupPolicy } from "../core/config-store"
+import type { ChannelId, ChatRef } from "../core/chat/types"
+import { getGroupPolicy, resolveKbNamespace } from "../core/chat/enabled-chats"
+import type { BrandInput } from "../core/brand"
+import { logger } from "../core/logger"
+
+export interface AssembleDeps {
+  repo: Repo
+  botQQ: number
+  /** 额外监听 AT 的 QQ,与 botQQ 一并视为 bot 触发 */
+  extraAtQQs?: number[]
+  /** 统一生效会话白名单 */
+  enabledChats?: ChatRef[]
+  /** 管理命令 + 转人工通知面；null/缺省 = 无管理面 */
+  adminSurface?: ChatRef | null
+  /**
+   * per-chat 旁路查询（ChannelRegistry.isBypassEnabled）。
+   * 反思 / 主题 / 主动补位共用；缺省恒 true。
+   */
+  isBypassEnabled?: (channel: ChannelId, chatId: string) => boolean
+  agent: Agent
+  reflectScanMs?: number
+  reflectLookbackMs?: number
+  reflectSettleMs?: number
+  reflectWindowMax?: number
+  reflectCompactMs?: number
+  reflectCompactMinEntries?: number
+  reflectPromoteMs?: number
+  reflectPromoteMinEntries?: number
+  reflectPromoteMaxPerRun?: number
+  // 反思沉淀/整理后是否通知管理群。缺省 true(保持既有行为)
+  reflectNotifyAdmin?: boolean
+  // 会话空闲超时(ms):超时则下条消息开全新对话,不 resume 旧会话。缺省 5 分钟
+  resumeTtlMs?: number
+  proactiveEnabled?: boolean
+  proactiveScanMs?: number
+  proactiveSilenceMs?: number
+  proactiveMaxPerScan?: number
+  proactiveCandidateBudget?: number
+  handoffTimeoutMin?: number
+  /** 平台/客服品牌身份，供主链路与旁路判定器共用。 */
+  brand?: BrandInput
+  supportUrl?: string
+  ackEnabled?: boolean
+  maxReplyChars?: number
+  topicScanMs?: number
+  topicSettleMs?: number
+  topicWindowMax?: number
+  topicPromptMax?: number
+  groupPolicies?: Record<string, GroupPolicy>
+}
+
+// 会话空闲 TTL 默认值:5 分钟无活动 → 新开对话
+const DEFAULT_RESUME_TTL_MS = 300_000
+
+/** 装配全链路,返回 teardown 用于热重载时卸载监听器与定时器 */
+export function assemble(deps: AssembleDeps): () => void {
+  const { repo, botQQ, agent } = deps
+  const notifyAdmin = deps.reflectNotifyAdmin ?? true
+  const policies = deps.groupPolicies ?? {}
+  const store = new SessionStore(
+    repo,
+    deps.resumeTtlMs ?? DEFAULT_RESUME_TTL_MS
+  )
+
+  const enabledChats = deps.enabledChats ?? []
+  const adminSurface = deps.adminSurface ?? null
+
+  // 知识库分区解析器:主链路与三个反思旁路共用一份,避免各处传整张 policies 表。
+  // 漏配 kbNamespace 的会话回落 default(见 resolveKbNamespace)。
+  const resolveNamespace = (channel: ChannelId, chatId: string) =>
+    resolveKbNamespace({ groupPolicies: policies }, channel, chatId)
+
+  const shouldNotifyHandoff = (channel: ChannelId, chatId: string) => {
+    const p = getGroupPolicy({ groupPolicies: policies }, channel, chatId)
+    if (p?.notifyAdminOnHandoff !== undefined) return p.notifyAdminOnHandoff
+    return true
+  }
+
+  // 主动补位:全局开,或任一群策略显式开
+  const anyGroupProactive = Object.values(policies).some(
+    (p) => p.proactiveEnabled === true
+  )
+  const proactiveOn = !!deps.proactiveEnabled || anyGroupProactive
+
+  const cleanups: (() => void)[] = []
+  const dispose = () => {
+    // Teardown is a best-effort boundary: one faulty disposer must not leave
+    // later listeners/timers alive. Run in reverse registration order and
+    // preserve any listeners owned by other application components.
+    for (const cleanup of [...cleanups].reverse()) {
+      try {
+        cleanup()
+      } catch (err) {
+        logger.warn(
+          `[assemble] cleanup failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          {
+            scope: "runtime.teardown",
+            raw: err instanceof Error ? err.stack : String(err),
+          }
+        )
+      }
+    }
+    cleanups.length = 0
+  }
+
+  try {
+    cleanups.push(registerResolutionRecorder(repo))
+    cleanups.push(registerDeliveryRecorder(repo))
+    cleanups.push(registerErrorHandler({ supportUrl: deps.supportUrl }))
+    cleanups.push(
+      registerHandoffHandler({
+        repo,
+        adminSurface,
+        handoffTimeoutMin: deps.handoffTimeoutMin ?? 30,
+        shouldNotify: shouldNotifyHandoff,
+      })
+    )
+    // gateway 必须先于 message-buffer 注册:同 tick 内 prior 回看时当前消息尚未入库;
+    // excludeMessageId 是双保险,防止当前触发消息被误纳入 prior。
+    cleanups.push(
+      registerGateway({
+        repo,
+        botQQ,
+        extraAtQQs: deps.extraAtQQs,
+        enabledChats,
+        adminSurface,
+        supportUrl: deps.supportUrl,
+      })
+    )
+    cleanups.push(
+      registerOrchestrator({
+        agent,
+        store,
+        classify: makeIntentClassifier({ brand: deps.brand }),
+        ackEnabled: deps.ackEnabled !== false,
+        resolveNamespace,
+      })
+    )
+    cleanups.push(registerReplyMapper({ maxChars: deps.maxReplyChars ?? 900 }))
+    cleanups.push(
+      registerMessageBuffer({
+        repo,
+        botQQ,
+        extraAtQQs: deps.extraAtQQs,
+        enabledChats,
+        adminSurface,
+      })
+    )
+    cleanups.push(
+      registerTopicPoller({
+        repo,
+        enabledChats,
+        scanMs: deps.topicScanMs,
+        settleMs: deps.topicSettleMs,
+        windowMax: deps.topicWindowMax,
+        topicPromptMax: deps.topicPromptMax,
+        brand: deps.brand,
+        isBypassEnabled: deps.isBypassEnabled,
+      })
+    )
+    cleanups.push(
+      registerReflectionPoller({
+        repo,
+        enabledChats,
+        adminSurface,
+        scanMs: deps.reflectScanMs,
+        lookbackMs: deps.reflectLookbackMs,
+        settleMs: deps.reflectSettleMs,
+        windowMax: deps.reflectWindowMax,
+        notifyAdmin,
+        isBypassEnabled: deps.isBypassEnabled,
+        resolveNamespace,
+      })
+    )
+    if ((deps.reflectCompactMs ?? 3_600_000) > 0) {
+      cleanups.push(
+        registerReflectionCompactor({
+          repo,
+          adminSurface,
+          compactMs: deps.reflectCompactMs,
+          minEntries: deps.reflectCompactMinEntries,
+          notifyAdmin,
+        })
+      )
+    }
+    if ((deps.reflectPromoteMs ?? 86_400_000) > 0) {
+      cleanups.push(
+        registerReflectionPromoter({
+          repo,
+          adminSurface,
+          promoteMs: deps.reflectPromoteMs,
+          minEntries: deps.reflectPromoteMinEntries,
+          maxPerRun: deps.reflectPromoteMaxPerRun,
+          notifyAdmin,
+        })
+      )
+    }
+    if (proactiveOn) {
+      cleanups.push(
+        registerUnansweredPoller({
+          repo,
+          agent,
+          store,
+          classify: makeAnswerabilityClassifier({ brand: deps.brand }),
+          enabledChats,
+          adminSurface,
+          scanMs: deps.proactiveScanMs,
+          silenceMs: deps.proactiveSilenceMs,
+          maxPerScan: deps.proactiveMaxPerScan,
+          maxCandidatesPerScan: deps.proactiveCandidateBudget,
+          // 全局关时,只扫策略显式开启的群
+          globalProactiveEnabled: !!deps.proactiveEnabled,
+          groupPolicies: policies,
+          isBypassEnabled: deps.isBypassEnabled,
+        })
+      )
+    }
+    return dispose
+  } catch (err) {
+    dispose()
+    throw err
+  }
+}

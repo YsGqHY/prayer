@@ -1,6 +1,6 @@
 import WebSocket from "ws"
-import { bus } from "../../bus"
-import { logger } from "../../logger"
+import { bus } from "../../core/bus"
+import { logger } from "../../core/logger"
 import {
   encodeFrame,
   parseInboundFrame,

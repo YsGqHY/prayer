@@ -5,10 +5,12 @@
  *
  * 依赖解析:SDK / better-sqlite3 / sqlite-vec / zod 从 repo 根 node_modules 解析
  *   —— 本 plugin 装入 cache 后仍在 prayer repo 目录内,Node 向上走查命中根 node_modules。
- * 业务复用:embed(模型/向量)与 runKbSearch(检索+格式)复用 repo 的 lib,经 repo 根绝对路径 dynamic import。
- *   注意:Node strip-only 不支持 TS「参数属性」,故不导入 lib/db/repo.ts(其 constructor(private db) 会报错);
- *   向量近邻 SQL 在此内联,以 repo-like { searchKb } 传给 runKbSearch(kb.ts 仅 import type Repo,运行时不加载 repo.ts)。
- * DB 路径:父进程 env DB_PATH 传入(runtime.start / introspect 已绝对化),只读打开,不建表/迁移。
+ * 业务复用:embed(模型/向量)、runKbSearch(检索+格式)与 KB_SEARCH_SQL(向量近邻 SQL)
+ *   复用 repo 的 lib,经 repo 根绝对路径 dynamic import。
+ *   注意:Node strip-only 不支持 TS「参数属性」,故不导入 lib/core/db/repo.ts(其 constructor(private db) 会报错);
+ *   向量近邻 SQL 从 lib/core/db/kb-sql.ts 导入(唯一事实源),以 repo-like { searchKb } 传给 runKbSearch
+ *   (kb.ts 仅 import type Repo,运行时不加载 repo.ts)。
+ * DB 路径:父进程 env DB_PATH 传入(runtime.start / introspect 已规范化),只读打开,不建表/迁移。
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
@@ -53,22 +55,34 @@ const server = new McpServer({
 async function main(): Promise<void> {
   const root = findRepoRoot(dirname(fileURLToPath(import.meta.url)))
   const { embed } = await import(
-    pathToFileURL(join(root, "lib/tools/embed.ts")).href
+    pathToFileURL(join(root, "lib/model/embed.ts")).href
   )
-  const { runKbSearch, KB_TOOL_DESC, KB_SEARCH_SQL } = await import(
-    pathToFileURL(join(root, "lib/tools/kb.ts")).href
+  const { runKbSearch, KB_TOOL_DESC } = await import(
+    pathToFileURL(join(root, "lib/knowledge/kb.ts")).href
+  )
+  const { KB_SEARCH_SQL } = await import(
+    pathToFileURL(join(root, "lib/core/db/kb-sql.ts")).href
+  )
+  const { canonicalDbPath, databaseOpenPath } = await import(
+    pathToFileURL(join(root, "lib/core/db/path.ts")).href
   )
 
   // 只读打开:多进程共享同一 WAL 库,检索为纯读;不建表/迁移(由主进程负责)
-  const dbPath = resolve(process.env.DB_PATH ?? join(root, "data/agent.db"))
-  const db = new Database(dbPath, { readonly: true, fileMustExist: true })
+  const dbPath = canonicalDbPath(
+    process.env.DB_PATH ?? join(root, "data/agent.db"),
+    root
+  )
+  const db = new Database(databaseOpenPath(dbPath, root), {
+    readonly: true,
+    fileMustExist: true,
+  })
   sqliteVec.load(db)
 
-  // 本轮知识库分区:父进程 agent.run 按会话解析后经 env 注入(见 lib/agent/agent.ts)。
+  // 本轮知识库分区:父进程 agent.run 按会话解析后经 env 注入(见 lib/conversation/agent.ts)。
   // 模型无从伪造;缺失时回落 default,与 resolveKbNamespace 的漏配语义一致。
   const namespace = process.env.KB_NAMESPACE?.trim() || "default"
 
-  // 与 repo.searchKb 共用 KB_SEARCH_SQL(kb.ts 唯一事实源):此前内联副本
+  // 与 repo.searchKb 共用 KB_SEARCH_SQL(lib/core/db/kb-sql.ts 唯一事实源):此前内联副本
   // 漏了 reflection_meta 过滤,管理员驳回的知识仍会经 kb_search 漏给用户
   const stmt = db.prepare(KB_SEARCH_SQL)
   const repo = {

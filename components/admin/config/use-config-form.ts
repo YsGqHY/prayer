@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { useLive } from "@/components/live-provider"
-import type { AppConfig as Cfg } from "@/lib/config/schema"
-import type { ChatRef } from "@/lib/channels/types"
-import { excludeAdminSurface } from "@/lib/config/chats"
-import { miraiConfigError } from "@/lib/config/mirai"
+import type { AppConfig as Cfg } from "@/lib/core/config/schema"
+import type { ChatRef } from "@/lib/core/chat/types"
+import { excludeAdminSurface } from "@/lib/core/config/chats"
+import { miraiConfigError } from "@/lib/core/config/mirai"
 
 type ScalarConfigKey = Exclude<
   {

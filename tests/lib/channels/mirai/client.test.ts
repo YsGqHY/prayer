@@ -7,8 +7,8 @@ import {
   type MiraiClientOpts,
 } from "@/lib/channels/mirai/client"
 import { MiraiChannel } from "@/lib/channels/mirai"
-import { bus } from "@/lib/bus"
-import type { IncomingMessage } from "@/lib/events"
+import { bus } from "@/lib/core/bus"
+import type { IncomingMessage } from "@/lib/core/chat/events"
 
 const token = "loopback-token"
 const hello = {

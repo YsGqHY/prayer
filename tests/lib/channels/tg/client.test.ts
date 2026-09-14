@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import type { Update } from "grammy/types"
-import { bus } from "@/lib/bus"
-import type { ActionSend, IncomingMessage } from "@/lib/events"
+import { bus } from "@/lib/core/bus"
+import type {
+  ActionSend,
+  ErrorOccurred,
+  IncomingMessage,
+} from "@/lib/core/chat/events"
 import {
   TelegramChannel,
   splitTelegramText,
@@ -309,6 +313,58 @@ describe("TelegramChannel", () => {
     expect(api.sent.length).toBe(before)
   })
 
+  it("未完成 getMe 握手时 send 拒绝，避免出站消息静默丢失", async () => {
+    const api = makeMockApi({ updatesQueue: [[]] })
+    const ch = track(
+      new TelegramChannel("tok", {
+        getOffset: () => offset,
+        setOffset: (n) => {
+          offset = n
+        },
+        api,
+        pollTimeoutSec: 0,
+        sleep: (ms) => delay(ms),
+      })
+    )
+
+    await expect(
+      ch.send({
+        channel: "tg",
+        chatId: "-100111",
+        text: "must not disappear",
+      })
+    ).rejects.toThrow("telegram channel not ready")
+    expect(api.sent).toHaveLength(0)
+  })
+
+  it("身份已知但轮询已断连时 send 仍拒绝，交由 outbox 重试", async () => {
+    const api = makeMockApi({ updatesQueue: [[]] })
+    const ch = track(
+      new TelegramChannel("tok", {
+        getOffset: () => offset,
+        setOffset: (n) => {
+          offset = n
+        },
+        api,
+        pollTimeoutSec: 0,
+        sleep: (ms) => delay(ms),
+      })
+    )
+    // 模拟 getMe 已成功、随后 getUpdates 超时/断线的状态。
+    const state = ch as unknown as { botId: number; connected: boolean }
+    state.botId = 42
+    state.connected = false
+
+    await expect(
+      ch.send({
+        channel: "tg",
+        chatId: "-100111",
+        text: "must retry",
+      })
+    ).rejects.toThrow("telegram channel not ready")
+    expect(api.sent).toHaveLength(0)
+  })
+
   it("401 记 lastError 并退避，进程不崩", async () => {
     const err = Object.assign(new Error("Unauthorized"), { error_code: 401 })
     let sleeps = 0
@@ -333,6 +389,83 @@ describe("TelegramChannel", () => {
     expect(ch.status().lastError).toMatch(/401/)
     expect(ch.isConnected()).toBe(false)
     await waitFor(() => sleeps >= 1, "backoff sleep")
+  })
+
+  it("轮询循环意外崩溃时记录 operational error", async () => {
+    const errors: ErrorOccurred[] = []
+    const onError = (event: ErrorOccurred) => errors.push(event)
+    bus.on("error.occurred", onError)
+    const api = makeMockApi()
+    api.getUpdates = async () => {
+      throw new Error("poll transport broke")
+    }
+    const ch = track(
+      new TelegramChannel("tok", {
+        getOffset: () => offset,
+        setOffset: (n) => {
+          offset = n
+        },
+        api,
+        pollTimeoutSec: 0,
+        sleep: async () => {
+          throw new Error("backoff scheduler broke")
+        },
+      })
+    )
+
+    try {
+      await ch.start()
+      await waitFor(
+        () => ch.status().lastError === "backoff scheduler broke",
+        "poll loop crash",
+        2000
+      )
+      expect(
+        errors.some(
+          (event) =>
+            event.scope === "tg.poll.loop" &&
+            event.channel === "tg" &&
+            event.userVisible === false &&
+            event.err instanceof Error &&
+            event.err.message === "backoff scheduler broke"
+        )
+      ).toBe(true)
+    } finally {
+      bus.off("error.occurred", onError)
+    }
+  })
+
+  it("退避期间 stop 可中断 sleep，不被最长退避阻塞", async () => {
+    const err = Object.assign(new Error("Unauthorized"), { error_code: 401 })
+    let sleepStarted = false
+    let releaseSleep!: () => void
+    const api = makeMockApi({ getMeError: err })
+    const ch = track(
+      new TelegramChannel("bad", {
+        getOffset: () => offset,
+        setOffset: (n) => {
+          offset = n
+        },
+        api,
+        pollTimeoutSec: 0,
+        sleep: () => {
+          sleepStarted = true
+          return new Promise<void>((resolve) => {
+            releaseSleep = resolve
+          })
+        },
+      })
+    )
+    await ch.start()
+    await waitFor(() => sleepStarted, "backoff sleep started")
+    await Promise.race([
+      ch.stop(),
+      delay(250).then(() => {
+        throw new Error("stop remained blocked in backoff sleep")
+      }),
+    ])
+    releaseSleep()
+    expect(ch.isConnected()).toBe(false)
   })
 
   it("stop 中止 in-flight getUpdates 并退出 loop", async () => {

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import WebSocket from "ws"
-import { bus } from "@/lib/bus"
+import { bus } from "@/lib/core/bus"
 import { MiraiWsServer } from "@/lib/channels/mirai/server"
 import { PROTOCOL_VERSION } from "@/lib/channels/mirai/protocol"
-import type { IncomingMessage } from "@/lib/events"
+import type { IncomingMessage } from "@/lib/core/chat/events"
 
 let server: MiraiWsServer | undefined
 let port = 0

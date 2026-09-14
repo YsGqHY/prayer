@@ -16,10 +16,10 @@ const cfg = {
   proactiveSilenceMs: 180_000,
 }
 
-vi.mock("@/lib/app-context", () => ({
+vi.mock("@/lib/core/app-context", () => ({
   getAppContext: () => ({ cfg, repo: {} }),
 }))
-vi.mock("@/lib/reflect-stats", () => ({
+vi.mock("@/lib/knowledge/reflection/stats", () => ({
   buildGroupChatStats: () => ({
     cursors: new Map(),
     msg: new Map(),

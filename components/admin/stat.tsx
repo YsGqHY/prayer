@@ -7,7 +7,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 
 /** 指标卡:小标签 + 大数字 + 一行说明。用于少量核心 KPI(概览页)。 */
 export function StatCard({
@@ -97,17 +97,6 @@ export function MetricRows({
             {item.value}
           </span>
         </div>
-      ))}
-    </div>
-  )
-}
-
-/** 指标行的加载骨架。 */
-export function MetricRowsSkeleton({ count = 4 }: { count?: number }) {
-  return (
-    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-      {Array.from({ length: count }).map((_, i) => (
-        <Skeleton key={i} className="h-8 w-full" />
       ))}
     </div>
   )

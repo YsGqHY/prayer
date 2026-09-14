@@ -1,0 +1,479 @@
+# 模块化分层重构设计
+
+## 背景与承接
+
+本文承接 [性能与可维护性第一阶段设计](2026-09-09-performance-maintainability-phase1-design.md)
+（已合入 main）。那一阶段把「大页面拆分」列为非目标并推迟，本文接上它，同时处理
+`lib/` 目录本身的归属混乱。
+
+触发点不是「代码没有结构」。仓库已有分域（`agent/ db/ channels/ config/ tools/ plugins/`），
+`docs/development.md` 也写了模块边界。真正的问题是**同一个概念散落在两个家**，以及
+**多个目录的划分轴不一致**，导致为新功能选位置时每次都要人肉判断。
+
+后续要铺的四条路：新消息通道、Agent 能力扩展、知识库与反思链路、后台运营与商业化。
+本设计让这四类改动各自有唯一且可从目录名推断的落点。
+
+## 目标
+
+做完之后应满足三条可检验的判据：
+
+1. `lib/` 根目录只剩 `runtime.ts`（组合根）一个文件。
+2. 不打开代码，只看目录名就知道「新通道写哪、新 Agent 能力写哪、新知识库能力写哪」。
+3. 分层测试以**空基线**运行（无白名单），逆向依赖由机器拦住而不是靠自觉。
+
+## 当前证据
+
+**通道侧不对称。** `lib/channels/tg/` 把单个通道的全部逻辑收在一处
+（`client.ts` 572 行、`enrich.ts`、`media.ts`、`parse.ts`、`admins-cache.ts`、`bypass-state.ts`、
+`trigger.ts`，共 7 个）。QQ 却被劈成两半：`client.ts` 在 `lib/channels/qq/`，而 `parse.ts`、
+`enrich.ts`、`media.ts`、`admins.ts`、`members-fetch.ts` 留在 `lib/onebot/`，另外夹一个 5 行的
+兼容 re-export `lib/onebot/client.ts`。`channels/qq/` 只有 2 个文件，`onebot/` 有 6 个。
+
+**通道词汇不是传输层，而地基今天反向依赖它。** `lib/agent/*` 对 `lib/channels/*` 共 19 处
+import，全部是类型或读配置的辅助函数：`ChannelId`、`ChatRef`、`makeSessionKey`、
+`makeDedupeKey`、`parseSessionKey`、`legacySessionKeyToCanonical`，以及 `enabled-chats` 导出的
+`getGroupPolicy`/`isAdminSurface`/`isChatEnabled`。没有一处触及传输实现。
+`lib/events.ts` 也只以 `import type` 依赖 `channels/types`。
+
+更能说明问题的是 `lib/config/`——这一层本应是地基——`chats.ts`、`env.ts`、`migrate.ts`、
+`schema.ts` 共 4 处 import `../channels/types`，其中 `chats.ts` 与 `schema.ts` 是**运行时值**
+import（`CHANNEL_IDS`），另两处是 `import type`。也就是说「配置」依赖「通道」，
+「通道」的传输实现又反过来依赖「配置」，方向是乱的。
+
+顺带记下一条：`lib/events.ts` 与 `lib/channels/types.ts` 以 `import type` 互相引用
+（`events.ts:1` 取 `ChannelId`，`types.ts:1` 取 `ActionSend`）。类型层双向不构成运行时循环，
+但说明这两者是同一个概念——收信与发信词汇——被拆在了两个目录。
+
+**反思链路反向依赖 Agent 类。** `lib/agent/reflection-{poller,compactor,promoter}.ts` 从
+`./agent` 取 `noToolQueryOptions` 与 `drainQuery`。也就是说「知识库与反思」这条链，
+在结构上被迫依赖「会话与编排」。
+
+**`lib/` 根目录散落 23 个裸文件**，其中成组的概念各飘一处：`reflect-promote.ts`（写入工具）
+与 `lib/agent/reflection-promoter.ts`（编排）分居两地；`tool-stats.ts`、`usage-stats.ts`、
+`reflect-stats.ts` 三个统计各占一处；`name-cache.ts`、`name-cache-store.ts`、`group-name.ts`
+三个命名逻辑不成组。
+
+**大文件。** `app/admin/sessions/page.tsx` 1077 行、`app/admin/kb/page.tsx` 1052 行、
+`app/admin/reflection/page.tsx` 686 行、`app/admin/groups/page.tsx` 629 行、
+`lib/agent/agent.ts` 715 行。
+
+**已确认的重复与死代码。** `components/admin/nav-list-item.tsx` 全仓 0 引用（含动态字符串）。
+渠道中文标签重复两份且已经跑偏：`sessions:76` 的 `CHANNEL_LABEL` 含 `discord → "Discord"`，
+`groups:117` 的 `channelLabel` 没有该映射，非 qq/tg 直接返回原值。时长格式化至少 5 处
+（`groups:93`、`proactive:66`、`reflection:101`、`handoff:40`、`sessions:141`），
+其中 `proactive:66` 多出一个「秒」粒度层级，其余四处只有分钟粒度。
+
+## 目标结构
+
+```
+lib/
+  runtime.ts          # 唯一根文件 = 组合根，接通道 + agent + 后台循环
+  core/               # L0 地基：不依赖任何其它层
+    db/ config/
+    bus.ts logger.ts log-context.ts app-context.ts config-store.ts
+    auth.ts settings-writer.ts concurrency.ts utils.ts brand.ts api.ts
+    chat/             # 收发信词汇与生效群状态
+      types.ts events.ts ids.ts enabled-chats.ts name-cache.ts name-cache-store.ts group-name.ts
+  model/              # L1 模型基座：SDK 调用与模型 I/O
+    sdk-env.ts query-options.ts drain.ts system-prompt.ts tool-policy.ts prompt.ts
+    sanitize-input.ts json-output.ts timeout.ts embed.ts introspect.ts
+    stats/            # 模型与工具的用量计量
+      usage.ts tool.ts
+    plugins/
+      manager.ts      # 本地 MCP server 进程管理 = 模型能用哪些工具
+  channels/           # L2 通道实现
+    qq/               # client.ts index.ts parse.ts enrich.ts media.ts admins.ts members-fetch.ts
+    tg/               # client.ts parse.ts enrich.ts media.ts admins-cache.ts bypass-state.ts trigger.ts
+    registry.ts factory.ts keepalive.ts
+  knowledge/          # L2 知识库与反思
+    kb.ts kb-path.ts kb-prefetch.ts
+    reflection/
+      poller.ts compactor.ts promoter.ts apply-promote.ts stats.ts
+  conversation/       # L3 会话与编排
+    agent.ts orchestrator.ts session.ts gateway.ts message-buffer.ts reply-mapper.ts
+    intent.ts answerability.ts handoff-handler.ts prior-context.ts error-handler.ts
+    command-keywords.ts transcript.ts assemble.ts resolution-recorder.ts
+    pollers/
+      topic.ts unanswered.ts
+```
+
+四个非显然的判断，理由在此：
+
+**一、`channels/{types,ids,enabled-chats}`、`events.ts` 与命名逻辑下沉到 `core/chat/`。**
+它们是全仓共用词汇（见「当前证据」第一、二条）。留在 `channels/` 会让 `conversation/`
+反向依赖传输层，把分层做成摆设。把 `events.ts` 一并迁入，是因为它与 `channels/types.ts`
+本是一对（收信与发信词汇）却分居两处、以 `import type` 互引；并排放消除这个跨目录引用。
+代价是 import 路径换名，不涉及逻辑。
+
+**二、`lib/onebot/` 整个目录消失。** 五个模块并入 `channels/qq/`，与 `channels/tg/` 对称；
+`client.ts` 那个兼容 shim 删掉。旧路径不保留。
+
+**三、独立出 `model/` 层。** `agent.ts` 的 715 行里约 400 行回答的是「怎么调模型」
+（SDK 环境、query options、drain、system prompt、工具白名单、prompt 构造），
+不是「会话怎么走」。抽出来一举两得：既服务 `conversation/`，也让
+`knowledge/reflection/*` 不再反向依赖 `agent.ts`。同属这一层的还有：
+`sanitize-input`（打给模型的输入清洗）、`json-output`（模型结构化输出解析）、
+`embed`（本地嵌入）、`usage-stats`/`tool-stats`（按调用点与工具名的用量计量，
+`agent.ts` 与 `runtime.ts` 都消费）、`plugins/manager`（本地 MCP server 进程管理，
+即模型能用哪些工具；消费者是 `app/api/plugins/*` 三个路由加三个测试文件）。
+
+**四、`lib/tools/` 与 `lib/plugins/` 两个目录随之消失。** 前者的两个文件分别去 `model/`
+与 `knowledge/`，后者唯一的 `manager.ts` 去 `model/plugins/`。不为单个文件保留一层。
+
+## 依赖规则
+
+单向偏序，只准从上往下依赖。下图箭头由依赖方指向被依赖方，`core` 在最底：
+
+```
+    runtime.ts
+        ↓
+   conversation
+        ↓
+  ┌─────┴─────┐
+channels   knowledge
+  └─────┬─────┘
+        ↓
+      model
+        ↓
+       core
+```
+
+- `core` 只依赖 `core`（外加外部运行时依赖）。**「外加外部运行时依赖」不是废话**：
+  `lib/core/chat/group-name.ts` 是个 `"use client"` 的 React hook（`useState`/`useEffect`），
+  它必须留在 `core` 才能被 `app/admin/*` 的页面用——因为 `components/` 只可依赖 `core`。
+  这也是 `core` 层里唯一的客户端模块。后人若因「地基层不该有 react」而想把它挪走，
+  先读这条：**挪走会破坏 `components/` 的依赖规则**。
+- `model` 只依赖 `core`。
+- `channels`、`knowledge` 只依赖 `core` 与 `model`，两者是同级兄弟，互不依赖
+  （已核实：零交叉 import）。
+- `conversation` 可依赖以上全部。
+- `runtime.ts` 是组合根，可依赖全部。`instrumentation.ts` 只调它。
+- `app/` 可依赖全部。`components/` 只可依赖 `core` 与 `components/` 自身。现状核实：
+  `components/` 对 `lib/` 的依赖只有 `utils`（41 处）、`brand`（3 处）、`config/schema`、
+  `config/chats`、`channels/types` 各 1 处，搬迁后全部落在 `core` 内，无需破例。
+
+**规则由测试执行，不靠自觉。** 新增 `tests/architecture/layering.test.ts`：扫描 `lib/**`
+的每个文件，解析 import specifier，按映射表判定所在层，断言不存在逆向依赖，违规时报出
+「文件 → 目标」。`app/` 无层约束（可依赖全部），无需扫描；受约束的是 `components/`，
+由一条独立用例断言它只依赖 `core`。测试还需包含扫描器自检用例——用合成样例断言它确实
+能识别逆向依赖，否则扫描器一旦失灵，护栏会静默空过。不引入新依赖，与仓库既有
+`tests/ui/*-contracts.test.ts` 的结构契约测试风格一致。
+
+**先清永久违规，再以空基线落地。** 按目标结构扫描全部 `lib/**` 的跨层依赖后，实际的
+永久违规（即阶段全做完后依然存在）只有两条，其余都是阶段间的临时边。因为永久违规数量
+少，**不采用白名单**——「登记违规 + 断言不新增」的结构会让护栏变成橡皮图章，往白名单加一
+行的改动量与写业务代码同量级，评审里几乎不可见。改为：
+
+1. 阶段 0 先修掉这两条永久违规（见下），使分层测试**以空基线落地**，无白名单可盖。
+2. 阶段间的临时边用**边集合**表达，每条形如 `{ from, to, removedBy: "2b" }`，并额外断言
+   「`removedBy` 等于当前阶段时该条目必须已不存在」，让临时条目到点自红。
+3. 再断言边集合的**精确条数**。任何新增的跨层依赖都会改这个数字，暴露在 diff 里。
+
+**两条永久违规：**
+
+- `lib/onebot/members-fetch.ts:6` 向上依赖组合根 `lib/runtime.ts`（L88 用作默认 `fetchFn`）。
+  修法：去掉 `getRuntime()` 默认值，把 `LoadGroupMembersOpts.fetchFn` 改为必填，由
+  `app/api/onebot/admins/route.ts:49` 与 `app/api/onebot/members/route.ts:16` 两个调用点
+  注入 runtime 的取成员能力。测试本来就传 `fetchFn`。
+- `lib/db/repositories/knowledge.ts:3` 值导入 `../../tools/kb.ts` 的 `KB_SEARCH_SQL`
+  （L123 用于 `.prepare()`）。阶段 2a 把 db 移入 core、阶段 4 把 kb 移入 knowledge 之后，
+  这条变成 `core → knowledge` 逆向。修法：**SQL 归仓储所有**——把该常量定义挪进 knowledge
+  仓储。注意 `lib/tools/kb.ts:19` 只定义、并不使用它，所有权本就错位。
+
+两处修法都是行为不变：一处是把依赖反转成注入，一处是搬一个字符串常量。
+`plugins/cs` 也按硬编码路径引 `KB_SEARCH_SQL`，必须与上一条同一阶段改（见「既有引用同步」）。
+
+**初始边集合共 5 条**，除上面两条永久违规外，另有 3 条由阶段 3 消掉：
+
+```
+lib/agent/reflection-compactor.ts:6  knowledge → conversation  ./agent
+lib/agent/reflection-poller.ts:7     knowledge → conversation  ./agent
+lib/agent/reflection-promoter.ts:7   knowledge → conversation  ./agent
+```
+
+这三条正是「反思链路反向依赖 Agent 类」的实例化。**阶段 3b** 把 `reflection-*` 的引用改指
+`model/` 之后，`knowledge → model` 合法，边消失。它们的 `removedBy` 是 `"3b"`。
+**除此之外不应再有容忍条目**——容忍集合从阶段 0 的 3 条单调递减到阶段 4 的 0 条。
+
+**3b 的硬性验收项：把 `lib/agent/reflection-{poller,compactor,promoter}.ts` 里对 `./agent` 的
+`noToolQueryOptions` / `drainQuery` 引用改指 `@/lib/model/…`，并删掉这 3 条 `TOLERATED`。**
+切分若留下了 re-export shim（本项目明令禁止），边不会消失、`removedBy` 会误报；
+好在「到点自红」会在 `CURRENT_STAGE = "3b"` 时把这件事变成一个红灯，而不是静默漏过。
+
+**映射表按文件的「目标层」判定，不按磁盘当前物理位置。** 这一点很关键：`channels/types.ts`
+虽仍在 `lib/channels/` 下，映射表就把它当 `core`，因为它最终要去 `core/chat/`。于是
+`lib/config/*` 对它的 4 处引用在任何阶段都不算逆向——即便阶段 2a 已把 `config/` 移入
+`core/` 而 2b 还没搬 `types.ts`。中途的物理不一致不是违规，只有「最终归属」错位才是。
+这样容忍集合里就不会出现随阶段生灭的噪声条目，它是一条单调递减的曲线。
+
+同理，映射表按前缀匹配，搬迁完成时把旧前缀移入 `RETIRED` 列表，并断言**没有任何文件命中
+已退役前缀**——这条断言免费换来「旧路径真的删干净了」的检查，比人肉 grep 可靠。
+
+## 迁移阶段
+
+每阶段一个独立分支，合入 main 后再开下一阶段，main 全程保持绿色。不建长命分支。
+
+| 阶段 | 内容 | 性质 | 验收 |
+| --- | --- | --- | --- |
+| 0 清违规 + 护栏 | 修两条永久违规（`fetchFn` 改注入、`KB_SEARCH_SQL` 归仓储）；`layering.test.ts` 以空基线落地（边集合 + `removedBy` + 精确条数）；`docs/development.md` 补层规则；`CLAUDE.md` Git 约定增补 `refactor/*` 前缀 | 两处行为不变的依赖调整 + 只加测试 | `pnpm check` 绿 |
+| 1 QQ 归并 | `lib/onebot/*` 并入 `channels/qq/`，删 shim；`tests/lib/onebot/*` 搬至 `tests/lib/channels/qq/` 并整目录删除 | 纯搬路径 | 6 个测试搬完仍绿；`lib/onebot/` 与 `tests/lib/onebot/` 均消失 |
+| 2a core 地基 | `db/ config/` 与根目录设施迁入 `core/` | 纯搬路径 | 临时边条数只减不增 |
+| 2b 共享词汇 | `channels/{types,ids,enabled-chats}`、`events.ts`、`name-cache*`、`group-name` 迁入 `core/chat/` | 纯搬路径 | `core/chat` 相关临时边清空 |
+| 3a model 搬迁 | `sanitize-input`/`json-output`/`timeout` 迁入；`tools/embed` → `model/embed`；`usage-stats`/`tool-stats` → `model/stats/`；`plugins/manager` → `model/plugins/` | 纯搬路径 | 纯搬迁完成；`lib/plugins/` 目录消失（`lib/tools/` 要等 4，因为 `kb.ts` 还在） |
+| 3b model 切分 | 从 `agent.ts` 切出 `sdk-env`/`query-options`/`drain`/`system-prompt`/`tool-policy`/`prompt`；**`reflection-*` 改指 `model/` 并删掉 3 条 `TOLERATED`** | 切分 | `agent.ts` 降至约 300 行，测试绿；容忍集合清空 |
+| 4 知识/会话分层 | `tools/kb`、`kb-path`、`kb-prefetch`、`reflection-*`、`reflect-promote`、`reflect-stats` → `knowledge/`；其余 `agent/*` → `conversation/`（含 `resolution-recorder.ts`） | 纯搬路径 | **临时边集合清空** |
+| 5 后台大文件 | 见下节 | 有设计 | 行为不变 + 真机验证；行数仅作手段 |
+| 6 收尾文档 | 落位指南：新通道 / 新 Agent 能力 / 新知识库能力分别写哪 | 只加 | — |
+
+阶段 1–4 是零行为改动（搬路径与切纯函数；阶段 3 只切不写）。阶段 0 的两处依赖调整
+也是行为不变，它是本次唯一触碰函数签名与常量归属的地方，单独成一个分支便于评审。
+阶段 5 与它们互相独立，顺序可调。
+
+**每个搬迁阶段（1、2a、2b、3、4）的隐含必做项，同样进验收：**
+
+1. **同步护栏映射表** —— 改 `tests/architecture/layering.test.ts` 的 `PREFIX_RULES`（删掉搬走文件的
+   规则，新位置由 `lib/core/` 这类目录规则覆盖）、把旧前缀登记进 `RETIRED_PREFIXES`、按需下调
+   `TOLERATED` 并 bump `CURRENT_STAGE`。漏登记不会让核心的「逆向依赖精确一致」失败，但会让
+   「退役前缀已被清空」这条防线**静默失效**——那正是「旧路径真的删干净了」的机器检查，
+   靠人记得登记才生效。
+2. **同步镜像测试目录** —— `docs/development.md` 明写「测试放在 `tests/`，镜像源码目录」。
+   源码搬了，对应的测试目录要跟着搬，包括新增层级（`lib/db/` → `lib/core/db/` 时，
+   `tests/lib/db/` → `tests/lib/core/db/`）。不做的话那份文档立刻开始说谎，而这正是本次重构
+   要消灭的东西。测试多用 `@/` 别名导入，所以多数情况下只需 `git mv`。
+   **阶段 1 之所以没暴露这条**，是因为它只在同深度内搬（`lib/onebot/` → `lib/channels/qq/`），
+   镜像恰好自动成立。
+3. **删掉 `docs/development.md`「待改写条目」表里自己那一行**——使命结束即删除，留着就是新的
+   腐烂源。顺带清掉更早阶段遗留下来、已经完成的死行。
+
+代价如实说明：阶段 1–4 合计约 90 个源文件及对应测试需要改 import 路径。改动机械但量大，
+所以拆成 7 个分支，使每刀评审只需看一个概念。
+
+**分支与 CI 成本。** 分支前缀统一用 `refactor/*`，并在 `CLAUDE.md` 的 Git 约定里增补
+该前缀——纯粹搬迁挂 `feat/` 语义不准。`.github/workflows/check.yml` 在 PR 与 push main
+都触发，除 `pnpm check` 外还跑完整生产构建（约 20 分钟）。7 个阶段即 7 个 PR 加 7 次
+main 构建。这个成本是拆细的代价，接受。
+
+搬迁时**代码注释里的路径引用要一并改**，例如 `lib/db/migrations/schema.ts:34` 的注释提到
+`lib/tool-stats.ts`。这类引用不进类型检查，漏了不会报错，只会慢慢腐烂。
+
+### 既有引用同步（每阶段的必做项，不是收尾工作）
+
+这是本设计最容易漏的一环，且漏了不会报错。要同步的有两类。
+
+**一、文档。** 仓库有成文的结构约定文档，它们**现在就描述着即将不存在的路径**。
+若把文档更新推到最后，阶段 2a 一合入，`docs/development.md` 的模块边界就开始说谎。
+
+| 阶段 | 须同步的文档条目 |
+| --- | --- |
+| 0 | `docs/development.md` 增补分层规则；把阶段 1–4 将作废的条目**逐条列出并标注**「由阶段 N 改写」；`CLAUDE.md` 的 Git 约定增补 `refactor/*` 前缀 |
+| 1 | `CLAUDE.md` 的「仓库结构」一节中的 `onebot/` 一项（该目录消失） |
+| 2a | `docs/development.md` 的「模块边界」一节中 `lib/config/schema.ts`、`lib/config/{env,migrate,chats,patch}.ts`、`lib/config-store.ts`、`lib/db/repositories/`、`lib/db/migrations/` 五条路径；`docs/data-access.md` 里「以上路径相对于 `lib/db/`」与 `lib/db/index.ts` 的引用；`docs/database-operations.md` 里 `lib/db/migrations/registry.ts` 与 `lib/db/index.ts` 的引用；`CLAUDE.md` 的「仓库结构」一节中的 `db/` 项 |
+| 2b | `docs/development.md` 的「模块边界」中 `lib/core/config-store.ts` 条目引用的 `lib/channels/enabled-chats.ts`（迁往 `lib/core/chat/`）。注意 `channels/types.ts`、`channels/ids.ts` 目前在文档中**没有任何引用**，2b 只需搬文件、无需改文档 |
+| 3a | `CLAUDE.md` 的「仓库结构」一节中的 `plugins/` 项（`lib/plugins/` 消失；**顶层 `plugins/` 是另一个东西，不动**）——**已完成** |
+| 4 | `CLAUDE.md` 的「仓库结构」一节中的 `tools/` 项（`lib/tools/` 迁往 `lib/model/` 与 `lib/knowledge/`）；`agent/` 一项（拆为 `conversation/` 与 `knowledge/`）；`CLAUDE.md` 的「命令」一节举例的 `tests/lib/agent/session.test.ts`（该测试镜像 `lib/agent/session.ts`，随 `agent/` 一起迁）；**`README.md` 的「项目结构」一节**（`lib/` 那段整体停留在重构前，四条里三条已作废） |
+
+**这张表本身漏过一项，记此为训。** `README.md` 的「项目结构」一节从头到尾没被登记，于是
+`lib/db/`（2a 迁走）、`lib/plugins/`（3a 迁走）、`lib/agent/`（4b 迁走）三处在文档里一直是旧路径，
+直到 4b 才被实施者顺手发现。**教训:列「要同步哪些文档」时，应当扫描全仓而非凭印象列举** ——
+`grep -rn "lib/" --include='*.md'` 一遍就能发现 README 这个漏网者。
+
+**不要在这些条目里写字面行号。** 行号会随任何一次编辑而腐烂，而腐烂的锚点会让施工者 grep 扑空、进而以为「已经改过了」。用章节名与文件名定位。
+
+`docs/development.md` 的「模块边界」一节里有一句「`lib/config-store.ts` …… 只依赖存储的
+两个键值操作」。该句在本设计取证时已被证伪（它运行时 import `channels/enabled-chats`），
+要连同路径一起修正而不是照搬。阶段 0 已处理。
+
+**二、代码里的硬路径，比文档危险。** 这些不是注释、不是类型导入，是**运行时才会解析的
+字符串路径**，typecheck 与分层测试都抓不到，漏了就是线上故障：
+
+| 位置 | 形式 | 何时失效 |
+| --- | --- | --- |
+| `instrumentation.ts:8-12,27` | 6 处相对路径 `await import("./lib/...")` | 阶段 2a、2b、3 各自涉及 |
+| `scripts/ingest.ts:3-5` | `../lib/db/index.ts`、`../lib/db/repo.ts`、`../lib/tools/embed.ts` | 2a、3 |
+| `scripts/db-maintenance.ts:4` | `../lib/db/backup.ts` | 2a |
+| `proxy.ts:2` | `@/lib/auth` | 2a |
+| `plugins/cs/scripts/cs-mcp.ts:55-59` | `pathToFileURL(join(root, "lib/tools/embed.ts"))` 与 `lib/tools/kb.ts` | **0（`KB_SEARCH_SQL` 改指向）、3、4** |
+
+`plugins/cs` 这一条最险：它是**独立子进程**，按硬编码路径动态 import 主仓的模块
+（`lib/tools/kb.ts:5` 的注释专门警告过该加载约束）。阶段 3 搬 `embed`、阶段 4 搬 `kb`
+时必须同步改这两行，否则 cs 插件静默加载失败，而现有测试多半不覆盖这条路径。
+
+**搬迁时 `typecheck` 覆盖不到的引用类型**（阶段 2a 实测踩出来的，每个搬迁阶段都要过一遍）：
+
+1. **`vi.mock("@/lib/...")` 的字符串目标** —— 不改则 mock **静默失效**：测试仍然绿，
+   但它不再拦截真实模块，也就不再测它声称要测的东西。这是最隐蔽的一类。
+2. **运行时拼接的路径** —— `join(root, "lib/...")`、`pathToFileURL(...)`、字符串形式的
+   动态 `import()`。改漏了是运行时故障，不报编译错。
+3. **测试里对路径的断言** —— 例如断言某子进程能加载某个路径。
+4. **配置文件里的别名** —— `components.json` 的 shadcn alias、`tsconfig.json` 的 `paths`。
+5. **代码注释里的路径引用** —— 不报错，只会腐烂。
+6. **仓库入口文件的相对导入** —— `instrumentation.ts`、`scripts/`、`proxy.ts`。
+   它们常在 `lib/` 之外，容易在只看 `lib/` 的排查中被漏掉。
+
+所以搬迁阶段的验证不能只依赖 `pnpm typecheck` 变空；**必须配合一遍按旧路径 grep 的全仓扫描**，
+grep 的模式要覆盖 `.ts`、`.tsx`、`.json`、`.cjs`，且扫描范围要包含仓库根、`scripts/`、`plugins/`。
+
+**另注命名易混**：仓库顶层有 `plugins/`（`cs`、`packyapi` 两个本地 MCP server），
+本设计又新增 `model/plugins/`。两者含义不同（前者是插件本体，后者管理插件进程），
+但名字相近容易误读，实施时需在 `model/plugins/manager.ts` 的文档注释里点明区别。
+
+## 阶段 5：后台大文件拆分
+
+沿用 `components/admin/config/` 已确立的模式——**区块组件与状态 hook 同目录**（那里已有
+`use-config-form.ts`，`components/admin/use-polling.ts` 亦然，`hooks/` 现仅 `use-mobile.ts`）。
+这是追认现状，不是新约定。`hooks/` 根目录只留给真正跨页面的 hook。
+
+下面每页给的拆分后行数是**目标而非验收门槛**（理由见「验收标准」第 5 条），
+用来判断职责是否还混在一起。
+
+按省力到难排序，每页一个分支：
+
+**1. `reflection/page.tsx` 686 → 约 200。** 最省力。`CompactionRow`（L117–216）与
+`EntryRow`（L246–387）已自包含、自带详情懒加载，外提几乎零摩擦。产出
+`components/admin/reflection/{compaction-row,entry-row,entry-list}.tsx` 与
+`use-reflection-actions.ts`。
+
+**2. `groups/page.tsx` 629 → 约 200。** 产出 `groups/{group-table,policy-sheet}.tsx` 与
+`policy-payload.ts`（L50–135 的纯函数约 85 行）。摩擦点：Sheet 三个 Tri 状态经 `openEditor`
+读取 `globals` 默认值，外提时须把 `globals` 一并传入，或收成 `use-group-policy-form`。
+
+**3. `sessions/page.tsx` 1077 → 约 200。** 产出
+`sessions/{channel-badge,session-list,transcript-view,session-dialogs}.tsx` 与
+`use-session-selection.ts`（约 200 行）。最硬的摩擦点：**八个** ref（`activeKeyRef`、
+`activeUpdatedAtRef`、`sessionsRef`、`mountedRef`、`filterRef`、`transcriptGenRef`、
+`lastHandledUrlKeyRef`、`writingUrlKeyRef`）跨 `openSession` ↔ effect ↔ poller 共享，
+且 URL 同步与三个 effect、`refresh` 是一体的竞态治理。**必须整体进同一个 hook，拆两半即坏。**
+
+（本节原先写「六个 ref」，阶段 5a 的收尾审查实测为八个 —— 当时漏了 `activeUpdatedAtRef`
+与 `filterRef`。5b 按**八个**理解。）
+
+**4. `kb/page.tsx` 1052 → 约 150。** 产出
+`kb/{tree.ts,markdown-body.tsx,file-tree.tsx,editor-panel.tsx,file-dialogs.tsx}` 与
+`use-kb-files.ts`（约 250 行）。摩擦点：L236–250 与 L289–306 两处「渲染期调整 state」的写法
+是刻意绕 lint 的，外提时必须原样搬，不得顺手改成 effect；⌘/Ctrl+S 的 effect（L264–274）
+带 `eslint-disable` 且依赖 `content`，连同注释一起搬。
+
+**顺带清理**（同阶段做，不单开分支）：
+
+- 删 `components/admin/nav-list-item.tsx`（全仓 0 引用）。
+- 频道中文标签合并为 `core/chat/` 中一处。注意不是简单复制：`sessions:76` 的版本含
+  `discord` 映射，`groups:117` 的没有，合并时取全集。
+- 时长格式化合并为一处。现有至少 5 处（`groups:93`、`proactive:66`、`reflection:101`、
+  `handoff:40`、`sessions:141`），其中只有 `proactive:66` 支持「秒」粒度，
+  合并后要保留该粒度能力，否则是行为退化。
+
+## 非目标
+
+本次不做：
+
+- 不改任何运行时行为，不改数据库 schema。`db/migrations/` 的 SQL 与迁移语义一字不动，
+  只随目录搬迁更新其中的路径注释。
+- 不重命名 `app/api/*` 路由。`/api/onebot/*` 这类是传输名而非域名，理想应域名化，
+  但那要同步修改后台的 fetch 调用点，另行开事项。
+- 不动 `components/ui/`（shadcn 生成物）。
+- 不引入新依赖。依赖方向由自写的结构契约测试守卫，不引 `dependency-cruiser`。
+- 不写双路径兼容 shim，旧路径直接删除（已确认可删 `lib/onebot/client.ts` 之类的 re-export）。
+- 不改**提示词文案与模型参数取值**。阶段 3 会把 `system-prompt`、`tool-policy`、`prompt`
+  从 `agent.ts` 切出去，但只搬移，一字不改内容——这三块正落在 phase 1 冻结的
+  「提示词、模型参数」区（见 phase 1 非目标第 5 条），动了就是翻案。
+- 不处理认证模型与 Cloud 多租户架构（沿用 phase 1 的推迟决定）。
+- 不删不建 `lib/channels/discord/`。它目前只是 README 占位（`factory.ts:62` 注明二期），
+  随 `channels/` 保留原位。
+- **不改错误事件的 `scope` 标签。** `lib/channels/qq/client.ts` 里有一处
+  `scope: "onebot.enrich"`，它会经 `lib/logger.ts` 格式化成 `[onebot.enrich]` 出现在日志里，
+  属**可观察输出**，改名就是行为变更。按通道前缀命名它该是 `qq.enrich`（TG 侧对应值是
+  `tg.enrich`），但那是独立的行为变更，不属于任何一次「纯搬迁」，另行处理。
+
+## 验收标准
+
+1. 每个阶段结束时 `pnpm check`（typecheck + lint + 完整 Vitest）通过。
+2. `layering.test.ts` 从阶段 0 起就是空基线（无白名单）；阶段 4 结束时其临时边集合
+   亦清空，只剩精确条数 0。
+3. `lib/` 根目录只剩 `runtime.ts`。
+4. 阶段 5 每页行为不变——按 `docs/development.md` 的「环境与验证」一节的浏览器验证配方真机检查：
+   临时数据库、独立 Claude 配置目录、清空 QQ/TG 连接参数、关闭知识库预热与主动回复。
+   后四项是防止开发检查触发真实客服应答的，不可省略。
+5. **页面行数是手段，不是指标。** `docs/development.md` 明写「优先保护用户可感知行为，
+   而非组件数量、函数调用细节或文件行数」。行数只用于判断「是否仍有职责混杂」，
+   不作验收门槛，验收看行为不变与契约测试。
+6. 涉及页面与打包边界时另跑生产构建：本机有实例在跑时用
+   `NEXT_DIST_DIR=.next-verify pnpm build`，避免覆盖正在服务的 `.next`
+   （见 `docs/development.md` 的「环境与验证」一节）。
+7. 不把 `data/`、凭证或运行时产物纳入提交。
+
+## 风险
+
+**护栏不守 `app/`，而阶段 5 的战场正是 `app/`。** `layering.test.ts` 只扫 `lib/**`，另有一条
+用例约束 `components/` 只能依赖 `core`。**对 `app/` 没有任何约束**。阶段 5 要把四个后台页
+（合计约 3400 行）拆成组件 + hook；拆出的组件若进 `components/`，会被「只依赖 `core`」那条用例锁死 ——
+任何需要 `conversation`/`knowledge`/`model` 的类型或数据都必须留在 `app/`（server component，或继续走
+`/api/*` fetch），**不能下沉到 `components/`**。这条约束目前没有任何机器检查提醒，阶段 5 要自己守住。
+
+**存量债：`ChannelId` 的类型边界有若干「信任但未校验」处（阶段 5a 审查挖出，未处理）。**
+把渠道 id 从外部数据源（API 查询串、DB 行）当 `ChannelId` 用、却不做运行时校验的地方：
+`app/api/groups/activity/route.ts`、`app/api/proactive/route.ts`、`lib/core/chat/name-cache.ts`、
+`lib/knowledge/reflection/poller.ts`（三处）、`lib/conversation/agent.ts` —— 多数写成无守卫的
+`as ChannelId`。另有 DB 行层（`lib/core/db/rows.ts`、`models.ts`、各 `repositories/*`）把
+`channel` 标成 `string`，那是 SQLite 文本列的**诚实** I/O 类型，收紧要靠运行时校验（zod）而非改注解。
+还有 `lib/conversation/agent.ts` 的 `ToolContext.channel?: string`，注释自述是旁路迁移期的过渡态。
+**本设计不处理这一类**（它们与分层无关，且不少需要引入校验而非改类型），
+记在此处以免被当作「已顺手改过」。
+
+**`core` 的定位要在阶段 6 的落位指南里写清（阶段 5a 收尾审查提出）。** 它现在装着
+`utils.ts`（含 `cn()`）、`brand.ts`、`chat/group-name.ts`（React hook），又新添了两个**展示层**模块
+（`channel-labels.ts`、`format-duration.ts`）—— 后者是因为「`components/` 只可依赖 `core`」这条约束
+被推进来的。**`core` 的定位应写成「无依赖的纯工具与地基，含 UI 展示所需的纯函数」**，
+否则「core = 地基」这句会名不副实。若展示工具多到 5 个以上，再考虑另立 `lib/format/`
+（届时需在 `layering.test.ts` 的映射表里一并归层）；现在只有两个，不值得。
+
+**阶段 5 的验收要点（4b 收尾审查给出，不必新写护栏）：**「拆出的组件若 import `conversation`/
+`knowledge`/`model` 即违规」这条要**写进阶段 5 的任务验收**，靠现有那条 components 用例兜底，
+并**有意在拆分后跑一次它**。退役前缀不会误报 —— 它是「防止回退」的有意设计，42 项已达上限。
+
+**临时边集合仍可被加行。** 空基线消除了「永久例外」这个口子，但阶段间的临时边本身就是
+一份可编辑清单。缓解靠三点：`removedBy` 到点自红、精确条数断言、以及这些条目只在
+阶段 1–4 生存。阶段 4 结束后**该集合必须为空**，否则本次整理视为未完成。
+
+**阶段 0、3、5 不是纯移动**（阶段 0 动函数签名与常量归属，阶段 3 真实切分，阶段 5 有设计），
+且三者都触及实际代码路径。靠既有测试套件兜底；三者都不触碰数据库 schema 与运行时行为，
+`git revert` 即可回滚，不需要数据层回滚。阶段 1、2a、2b、4 是纯文件移动，回滚即 revert
+该分支，无残留。
+
+**阶段 1 不是逐字搬测试。** `tests/lib/onebot/` 的 6 个测试文件要与源码一起搬到
+`tests/lib/channels/qq/`（现该目录只有 `channel.test.ts`，与 tg/ 才有同名冲突不同，无重名）。
+但 `tests/lib/onebot/client.test.ts:6` 导入的正是要删除的 shim，必须改指
+`@/lib/channels/qq/client`（`OneBotClient` 的实际定义处）——这是改写 import，不是搬文件。
+搬空后 `tests/lib/onebot/` 整目录删除。
+
+**护栏的映射表会随搬迁变脏，且不总是可探测。** `PREFIX_RULES` 是手工维护的路径表，
+每个搬迁阶段都要改。已查明「忘记登记旧前缀」在两种情形下后果不同：若旧路径下还留有文件，
+「`lib` 下每个文件都归属于某一层」会报 orphan（可发现）；若该路径既无文件、也无新文件，
+那条死规则**完全不可见** —— 它不产生假 PASS（`scanLib` 遍历的是真实文件），但会污染映射表、
+误导后来改表的人。
+
+廉价堵法（约 10 行、零依赖）：断言**每条精确文件规则**（前缀不以 `/` 结尾）必须命中一个
+真实存在的文件。它堵不住目录规则（`lib/onebot/` 这类——目录可以合法地空着），但阶段 2a、3
+会大量新增精确文件规则（`lib/agent/reflection-poller.ts`、`lib/tools/embed.ts` 之类），
+那正是这条断言的目标。**阶段 2a 已实施。**
+
+**`RETIRED_PREFIXES` 必须全登记，不要试图只留目录项。** 阶段 2a 一度把退休清单从 14 项
+缩到 3 条目录项，理由是「退休的精确文件项已被上面那条断言与「每文件归层」覆盖」。**该简化
+被证伪并回滚**：退役一条精确文件规则后，若它的**父目录规则仍然存活**，把文件放回去会被
+那条目录规则**静默地**归成父目录那一层。例如 2b 之后 `["lib/channels/", "channels"]` 仍在，
+重建 `lib/channels/types.ts` 会被悄悄算作 `channels` —— 此时「退役前缀无命中」没有该项而放行、
+「精确规则命中真实文件」查的是规则不是文件、「每文件归层」又因规则命中而通过，三条全拦不住。
+例外情形（父目录无存活规则）确实能被那两条间接拦住，但那要求每次退役判断「父目录是否还活着」，
+判断错即静默失效。**统一全登记**。
+
+**分层测试只守跨层方向，层内方向无人管。** 阶段 2a 之后、2b 之前，`core` 层内有这样一条边：
+`lib/core/config-store.ts` 运行时 import `lib/core/chat/enabled-chats.ts` 的 `getGroupPolicy`，
+而后者反向引用 `config-store` 的**类型**。反向那条是 `import type`，**编译期擦除，
+不构成运行时循环**；两者同属 `core`，按层规则合法，测试不会报。
+
+**这条类型边已被阶段 2b 消除**：`enabled-chats.ts` 原先 `import type { AppConfig, GroupPolicy }
+from "../config-store"`，而这两个类型其实**定义在** `lib/core/config/schema.ts`，`config-store`
+只是 re-export。改成从定义处导入即可，且它仍是 `import type`——运行期擦除，零行为影响。
+
+**教训**：层内环未必要靠「调整初始化顺序」才能解，先看那条边引的是不是**定义处**。
+一开始把这条债务写成「调整任意一处都会改变初始化顺序，属行为改动」，是错的，会让后人
+把它当成难解的包袱永久搁置。

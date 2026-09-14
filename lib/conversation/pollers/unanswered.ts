@@ -1,0 +1,422 @@
+import { bus, emitErrorSafely } from "../../core/bus"
+import { logger } from "../../core/logger"
+import type { Repo } from "../../core/db/repo"
+import { AGENT_FALLBACK_TEXT, type Agent } from "../agent"
+import { isNoAnswerText, PROACTIVE_SUFFIX } from "../../model/prompt"
+import type { SessionStore } from "../session"
+import type {
+  AnswerabilityClassifier,
+  AnswerabilityResult,
+} from "../answerability"
+import type { GroupPolicy } from "../../core/config-store"
+import type { ChannelId } from "../../core/chat/types"
+import { makeSessionKey } from "../../core/chat/ids"
+import {
+  getGroupPolicy,
+  isAdminSurface,
+  type ChatRef,
+} from "../../core/chat/enabled-chats"
+import {
+  PROACTIVE_MAX_CANDIDATES_PER_SCAN,
+  PROACTIVE_MAX_PER_SCAN,
+  PROACTIVE_MIN_SCAN_MS,
+  PROACTIVE_MIN_SILENCE_MS,
+} from "../../core/config/schema"
+
+// 主动模式指令定义在 model/prompt.ts:预检索要按它剥前缀才能拿到干净的检索
+// query(见同模块 kbProbeText),这边只消费。
+
+/** 旧手写 poller 依赖仍可返回布尔值；生产判官使用三态结果。 */
+type PollerClassifier =
+  AnswerabilityClassifier | ((text: string) => Promise<boolean>)
+
+function normalizeClassification(
+  verdict: AnswerabilityResult | boolean
+): AnswerabilityResult {
+  if (typeof verdict === "boolean") {
+    return { decision: verdict ? "answerable" : "not_answerable" }
+  }
+  if (!verdict || typeof verdict !== "object") {
+    return { decision: "error", reason: "classifier_error" }
+  }
+  const decision = verdict.decision
+  if (
+    decision !== "answerable" &&
+    decision !== "not_answerable" &&
+    decision !== "error"
+  ) {
+    return { decision: "error", reason: "classifier_error" }
+  }
+  const reason = verdict.reason
+  return {
+    decision,
+    ...(reason === "timeout" ||
+    reason === "invalid_output" ||
+    reason === "classifier_error"
+      ? { reason }
+      : {}),
+  }
+}
+
+export interface UnansweredPollerDeps {
+  repo: Repo
+  agent: Agent
+  store: SessionStore
+  classify: PollerClassifier
+  /** 统一生效会话 */
+  enabledChats: ChatRef[]
+  adminSurface: ChatRef | null
+  scanMs?: number
+  silenceMs?: number
+  maxPerScan?: number
+  /** 每轮最多尝试判定/生成的候选数。 */
+  maxCandidatesPerScan?: number
+  now?: () => number
+  /** 全局主动开关 */
+  globalProactiveEnabled?: boolean
+  groupPolicies?: Record<string, GroupPolicy>
+  /**
+   * per-chat 旁路是否可用（ChannelRegistry 注入）。
+   * 缺省恒 true。
+   */
+  isBypassEnabled?: (channel: ChannelId, chatId: string) => boolean
+}
+
+interface Resolved {
+  repo: Repo
+  agent: Agent
+  store: SessionStore
+  classify: PollerClassifier
+  adminSurface: ChatRef | null
+  enabledChats: ChatRef[]
+  silenceMs: number
+  maxPerScan: number
+  maxCandidatesPerScan: number
+  now: () => number
+  globalProactiveEnabled: boolean
+  groupPolicies: Record<string, GroupPolicy>
+  isBypassEnabled: (channel: ChannelId, chatId: string) => boolean
+}
+
+function resolve(d: UnansweredPollerDeps): Resolved {
+  const positiveInt = (
+    value: number | undefined,
+    fallback: number,
+    max: number
+  ) =>
+    Number.isFinite(value)
+      ? Math.min(max, Math.max(1, Math.floor(value!)))
+      : fallback
+  const maxPerScan = positiveInt(d.maxPerScan, 2, PROACTIVE_MAX_PER_SCAN)
+  const maxCandidatesPerScan = Math.max(
+    maxPerScan,
+    positiveInt(
+      d.maxCandidatesPerScan,
+      12,
+      PROACTIVE_MAX_CANDIDATES_PER_SCAN
+    )
+  )
+  return {
+    repo: d.repo,
+    agent: d.agent,
+    store: d.store,
+    classify: d.classify,
+    adminSurface: d.adminSurface,
+    enabledChats: d.enabledChats,
+    silenceMs: d.silenceMs ?? 180_000,
+    maxPerScan,
+    maxCandidatesPerScan,
+    now: d.now ?? (() => Date.now()),
+    globalProactiveEnabled: d.globalProactiveEnabled ?? true,
+    groupPolicies: d.groupPolicies ?? {},
+    isBypassEnabled: d.isBypassEnabled ?? (() => true),
+  }
+}
+
+function chatPolicy(
+  d: Resolved,
+  channel: ChannelId,
+  chatId: string
+): GroupPolicy | undefined {
+  return getGroupPolicy({ groupPolicies: d.groupPolicies }, channel, chatId)
+}
+
+function chatEnabled(d: Resolved, channel: ChannelId, chatId: string): boolean {
+  const p = chatPolicy(d, channel, chatId)
+  return p?.proactiveEnabled ?? d.globalProactiveEnabled
+}
+
+function chatSilence(d: Resolved, channel: ChannelId, chatId: string): number {
+  const p = chatPolicy(d, channel, chatId)
+  return p?.proactiveSilenceMs ?? d.silenceMs
+}
+
+// 真答案判定:非空、不含哨兵、且不是 agent 降级兜底文案。撞任一 → 沉默。
+function isAnswer(text: string): boolean {
+  const t = text.trim()
+  return t.length > 0 && !isNoAnswerText(t) && t !== AGENT_FALLBACK_TEXT
+}
+
+async function scanOnce(d: Resolved): Promise<void> {
+  const now = d.now()
+
+  for (const { channel, chatId } of d.enabledChats) {
+    if (isAdminSurface(d.adminSurface, channel, chatId)) continue
+    // 旁路降级：由 channel.isBypassEnabled 决定
+    if (!d.isBypassEnabled(channel, chatId)) continue
+    if (!chatEnabled(d, channel, chatId)) continue
+    const silenceMs = chatSilence(d, channel, chatId)
+    const until = now - silenceMs
+    if (until <= 0) continue
+
+    try {
+      const cursor = d.repo.groupProactiveCursor(channel, chatId)
+      if (until <= cursor) continue // 无新沉降
+      // 冷启动:首见该会话 → 只推进游标,绝不回答上线前积压
+      if (cursor === 0) {
+        d.repo.setGroupProactiveCursor(channel, chatId, until)
+        continue
+      }
+
+      const rows = d.repo.groupMemberMessagesBetween(
+        channel,
+        chatId,
+        cursor,
+        until
+      )
+      // 每用户取 band 内最新一条为代表(questionTs=最新),对两条压制都是最宽松取值:
+      // 只要用户最后一句仍无人应答就兜底。前文多句升序拼进 text 作上下文。
+      const byUser = new Map<
+        string,
+        {
+          text: string
+          questionTs: number
+          messageId: string | null
+          rowId: number
+        }
+      >()
+      for (const r of rows) {
+        const prev = byUser.get(r.userId)
+        byUser.set(r.userId, {
+          text: prev ? `${prev.text}\n${r.text}` : r.text,
+          questionTs: r.createdAt,
+          messageId: r.messageId, // 代表 = band 内最后一条,引用它
+          rowId: r.id,
+        })
+      }
+
+      let hits = 0
+      let candidates = 0
+      let capped = false
+      for (const [userId, { text, questionTs, messageId, rowId }] of byUser) {
+        if (hits >= d.maxPerScan) {
+          capped = true
+          break
+        }
+        // 压制①:问题后(至 now)会话里有 owner/admin 发言 → 人工接管
+        if (d.repo.hasAdminMessageBetween(channel, chatId, questionTs, now))
+          continue
+        // 压制②:该用户会话已被主链路 @处理/已兜底过(setSessionId 刷了 updated_at)。
+        // 注:被意图门拦截的 @bot 消息不 remember → 不走此路,靠 fail-closed 判官兜住。
+        const key = makeSessionKey(channel, chatId, userId)
+        // human-mode 不抢答
+        if (d.repo.isHumanMode(key)) continue
+        const upd = d.repo.sessionUpdatedAt(key)
+        if (upd !== undefined && upd > questionTs) continue
+        if (candidates >= d.maxCandidatesPerScan) {
+          capped = true
+          break
+        }
+        // 预算统计的是实际进入判定/生成门的候选,而不是被前置压制的消息。
+        candidates++
+        // 门1:可答性
+        let verdict: AnswerabilityResult | boolean
+        try {
+          verdict = await d.classify(text)
+        } catch (err) {
+          // A classifier outage is operationally actionable even though this
+          // candidate remains retryable and must not advance the cursor.
+          emitErrorSafely({
+            scope: "proactive.classifier",
+            err,
+            channel,
+            chatId,
+            userVisible: false,
+          })
+          verdict = { decision: "error", reason: "classifier_error" }
+        }
+        // 兼容旧的手写依赖:布尔 true/false 分别视为 answerable/not_answerable。
+        const normalized = normalizeClassification(verdict)
+        const reason = normalized.reason ?? "classifier_error"
+        if (
+          normalized.decision !== "answerable" &&
+          normalized.decision !== "not_answerable"
+        ) {
+          bus.emit("resolution.recorded", {
+            kind: "proactive_silent",
+            sessionKey: key,
+            channel,
+            chatId,
+            userId,
+            detail: reason,
+          })
+          capped = true
+          break
+        }
+        if (normalized.decision === "not_answerable") {
+          bus.emit("resolution.recorded", {
+            kind: "proactive_silent",
+            sessionKey: key,
+            channel,
+            chatId,
+            userId,
+            detail: "not_answerable",
+          })
+          continue
+        }
+        // 门2:复用主链路 agent,带哨兵。
+        // 主动模式指令并入 user prompt(而非 system 后缀):使主动/正常两路径 system 前缀恒等,
+        // TTL 内可跨路径命中缓存(~1.5k token 的 system 只需写一次)。行为等价(单轮指令)。
+        // 故意不 resume 主会话:若续接,哨兵指令与 __NO_ANSWER__ 会写进 transcript,
+        // 后续 @ 主链路可能复读哨兵并外发(主链路原先无过滤)。真答案才 remember 新 session。
+        let result
+        try {
+          result = await d.agent.run(
+            `${PROACTIVE_SUFFIX}\n\n${text}`,
+            undefined,
+            { sessionKey: key, channel, chatId, userId }
+          )
+        } catch (err) {
+          bus.emit("resolution.recorded", {
+            kind: "proactive_silent",
+            sessionKey: key,
+            channel,
+            chatId,
+            userId,
+            detail: "agent_error",
+          })
+          emitErrorSafely({
+            scope: "proactive",
+            err,
+            channel,
+            chatId,
+            userVisible: false,
+          })
+          capped = true
+          break
+        }
+        // 只有完整 success 才能外发;缺失/partial/failed 均可重试,
+        // 不得把部分文本记为成功或推进游标。
+        if (result.status !== "success") {
+          bus.emit("resolution.recorded", {
+            kind: "proactive_silent",
+            sessionKey: key,
+            channel,
+            chatId,
+            userId,
+            detail: "agent_error",
+          })
+          capped = true
+          break
+        }
+        if (!isAnswer(result.text)) {
+          bus.emit("resolution.recorded", {
+            kind: "proactive_silent",
+            sessionKey: key,
+            channel,
+            chatId,
+            userId,
+            detail: "no_answer",
+          })
+          continue // 哨兵/空 → 沉默
+        }
+        if (result.sessionId) d.store.remember(key, result.sessionId)
+        const deliveryKey = `proactive:${key}:${questionTs}:${messageId ?? `row:${rowId}`}`
+        d.repo.insertProactiveReply(
+          channel,
+          chatId,
+          userId,
+          text,
+          result.text,
+          {
+            deliveryKey,
+            deliveryStatus: "pending",
+          }
+        )
+        bus.emit("reply.ready", {
+          channel,
+          chatId,
+          text: result.text,
+          replyToId: messageId ?? undefined,
+          deliveryKey,
+          resolutionKey: deliveryKey,
+        })
+        bus.emit("resolution.recorded", {
+          kind: "proactive",
+          sessionKey: key,
+          channel,
+          chatId,
+          userId,
+          deliveryKey,
+          resolutionKey: deliveryKey,
+        })
+        logger.log(
+          "info",
+          `[proactive] ${channel}:${chatId} 主动回答用户 ${userId}`
+        )
+        hits++
+      }
+
+      // 命中上限时不推进游标:下轮已答用户被压制②挡下,自然轮到溢出用户;避免答案被永久丢弃
+      if (!capped) d.repo.setGroupProactiveCursor(channel, chatId, until)
+    } catch (err) {
+      // 单会话失败不牵连其他;该会话不推进游标 → 下轮重试
+      emitErrorSafely({
+        scope: "proactive",
+        err,
+        channel,
+        chatId,
+        userVisible: false,
+      })
+    }
+  }
+}
+
+// 供测试直接驱动一次扫描
+export async function runScan(deps: UnansweredPollerDeps): Promise<void> {
+  await scanOnce(resolve(deps))
+}
+
+// 监听式装配:定时扫描,返回 teardown。旁路观察者,失败不阻断主链路。
+export function registerUnansweredPoller(
+  deps: UnansweredPollerDeps
+): () => void {
+  // Runtime constructor is a second safety boundary behind AppConfig parsing:
+  // direct callers cannot bypass the conservative outbound timing limits.
+  const d = resolve({
+    ...deps,
+    silenceMs: Number.isFinite(deps.silenceMs)
+      ? Math.max(PROACTIVE_MIN_SILENCE_MS, Math.floor(deps.silenceMs!))
+      : 180_000,
+  })
+  const scanMs = Number.isFinite(deps.scanMs)
+    ? Math.max(PROACTIVE_MIN_SCAN_MS, Math.floor(deps.scanMs!))
+    : 60_000
+  let running = false // 防重入:上一轮未结束则跳过本次触发,避免重复兜底
+  const timer = setInterval(() => {
+    if (running) return
+    running = true
+    void scanOnce(d)
+      .catch((err) =>
+        emitErrorSafely({
+          scope: "proactive",
+          err,
+          userVisible: false,
+        })
+      )
+      .finally(() => {
+        running = false
+      })
+  }, scanMs)
+  return () => clearInterval(timer)
+}

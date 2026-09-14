@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest"
 import { formatMiraiDetail } from "@/lib/channels/mirai"
-import { parseSessionKey, makeSessionKey } from "@/lib/channels/ids"
-import { CHANNEL_IDS } from "@/lib/channels/types"
+import { parseSessionKey, makeSessionKey } from "@/lib/core/chat/ids"
+import { CHANNEL_IDS } from "@/lib/core/chat/types"
 import {
   createChannels,
   DEFAULT_CHANNEL_FACTORIES,
 } from "@/lib/channels/factory"
-import type { AppConfig } from "@/lib/config-store"
-import type { Repo } from "@/lib/db/repo"
+import type { AppConfig } from "@/lib/core/config-store"
+import type { Repo } from "@/lib/core/db/repo"
 
 /** 只给工厂用到的字段;其余字段工厂不读,避免整份 AppConfig 字面量 */
 function baseCfg(): AppConfig {

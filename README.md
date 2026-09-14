@@ -5,7 +5,7 @@
 > 把重复问答交给 AI，把复杂问题交给人工，把每一次服务沉淀成下一次更好的答案。
 
 <p align="center">
-  <img src="docs/assets/qiyuan-mark.png" alt="Prayer 品牌标志" width="92" />
+  <img src="docs/assets/prayer-mark.png" alt="Prayer 品牌标志" width="92" />
   <br />
   <strong>Prayer</strong>
 </p>
@@ -15,7 +15,7 @@ Prayer 面向需要在 QQ、Telegram 等社区场景持续提供产品咨询的�
 ## 产品价值
 
 <p align="center">
-  <img src="docs/assets/qiyuan-value.svg" alt="Prayer 产品价值概览" width="100%" />
+  <img src="docs/assets/prayer-value.svg" alt="Prayer 产品价值概览" width="100%" />
 </p>
 
 <p align="center">
@@ -31,13 +31,13 @@ Prayer 面向需要在 QQ、Telegram 等社区场景持续提供产品咨询的�
 
 Prayer 把这三个问题做成了产品闭环：
 
-| 客服现场 | Prayer 的处理方式 |
-| --- | --- |
-| 用户在群里提问 | 只在配置的生效会话中响应，支持 @ 触发与会话上下文 |
-| 问题需要事实依据 | 自动检索知识库，将相关内容注入回答流程 |
-| 需要查价格、状态或业务数据 | 通过插件、Skill 和 MCP 接入业务工具 |
-| AI 无法可靠处理 | 转入人工队列，暂停该会话的自动回复 |
-| 人工给出了新答案 | 自动提炼为反思条目，整理、去重并可升格为正式知识 |
+| 客服现场                   | Prayer 的处理方式                                 |
+| -------------------------- | ------------------------------------------------- |
+| 用户在群里提问             | 只在配置的生效会话中响应，支持 @ 触发与会话上下文 |
+| 问题需要事实依据           | 自动检索知识库，将相关内容注入回答流程            |
+| 需要查价格、状态或业务数据 | 通过插件、Skill 和 MCP 接入业务工具               |
+| AI 无法可靠处理            | 转入人工队列，暂停该会话的自动回复                |
+| 人工给出了新答案           | 自动提炼为反思条目，整理、去重并可升格为正式知识  |
 
 ### 核心能力
 
@@ -58,7 +58,7 @@ Prayer 是默认平台品牌，不预设部署方一定经营某个产品。品�
 ## 一次咨询如何被处理
 
 <p align="center">
-  <img src="docs/assets/qiyuan-response-flow.svg" alt="Prayer 一次咨询的处理流程" width="100%" />
+  <img src="docs/assets/prayer-response-flow.svg" alt="Prayer 一次咨询的处理流程" width="100%" />
 </p>
 
 Prayer 的关键不是让模型“尽量回答”，而是让每一次回答都经过依据判断：有依据就自动解决，需要业务数据就调用工具，不确定就安全转人工，最终把结果沉淀下来。
@@ -66,8 +66,29 @@ Prayer 的关键不是让模型“尽量回答”，而是让每一次回答都�
 ## 运行架构
 
 <p align="center">
-  <img src="docs/assets/qiyuan-architecture.svg" alt="Prayer 运行架构图" width="100%" />
+  <img src="docs/assets/prayer-architecture.svg" alt="Prayer 运行架构图" width="100%" />
 </p>
+
+### 代码分层
+
+运行架构图展示的是代码边界，而不是进程数量。Prayer 的 `lib/` 只有一个组合根；其余模块按职责分层，依赖方向固定为“上层使用下层”：
+
+<p align="center">
+  <img src="docs/assets/prayer-code-layers.svg" alt="Prayer 代码分层与依赖方向" width="100%" />
+</p>
+
+`channels` 与 `knowledge` 是同级模块，互不依赖；`conversation` 可以组合所有下层能力，`runtime.ts` 负责装配生命周期。`app/` 页面和 API 可以依赖全部层，`components/` 只依赖 `components/` 自身与 `lib/core/`。这些边界由 [`tests/architecture/layering.test.ts`](tests/architecture/layering.test.ts) 自动检查，旧的 `lib/agent`、`lib/db`、`lib/config`、`lib/tools` 和 `lib/onebot` 路径已退役。
+
+新增能力按下面的落位规则放置：
+
+| 需求                                   | 落位                                                          |
+| -------------------------------------- | ------------------------------------------------------------- |
+| 新消息通道                             | `lib/channels/<channel>/`，并在 `registry` / `factory` 中注册 |
+| Agent、会话与编排                      | `lib/conversation/`                                           |
+| 知识库、反思与知识升格                 | `lib/knowledge/`                                              |
+| SDK 调用、embedding、工具策略与用量    | `lib/model/`                                                  |
+| 数据库、配置、事件总线与共享展示纯函数 | `lib/core/`                                                   |
+| 进程启动与运行时装配                   | `lib/runtime.ts`                                              |
 
 ### 客服闭环
 
@@ -83,30 +104,30 @@ Prayer 的关键不是让模型“尽量回答”，而是让每一次回答都�
 
 启动服务后访问 `/admin`。后台配置保存后会触发运行时重新装配，通道、定时任务和 Agent 会按新配置重新生效。
 
-| 页面 | 用途 |
-| --- | --- |
-| `/admin` | 运行状态、通道连接、会话数量、人工队列和今日业务结果 |
-| `/admin/logs` | 运行日志与异常排查 |
-| `/admin/sessions` | 历史会话、消息记录和会话重开 |
-| `/admin/handoff` | 待处理人工会话，处理完成后恢复自动答 |
-| `/admin/proactive` | 主动补位记录与结果 |
-| `/admin/kb` | 知识文档管理、编辑和向量摄入 |
-| `/admin/reflection` | 反思条目、整理进度和知识升格 |
-| `/admin/ranking` | 高频问题排行，帮助团队发现产品与文档缺口 |
-| `/admin/config` | QQ、Telegram、回复体验、会话、反思、通知和存储配置 |
-| `/admin/groups` | 生效会话、活动量和会话级策略覆盖 |
-| `/admin/capabilities` | 当前 Agent 的插件、Skill、MCP 与工具能力 |
-| `/admin/plugins` | 插件安装、更新、启停和重载 |
+| 页面                  | 用途                                                 |
+| --------------------- | ---------------------------------------------------- |
+| `/admin`              | 运行状态、通道连接、会话数量、人工队列和今日业务结果 |
+| `/admin/logs`         | 运行日志与异常排查                                   |
+| `/admin/sessions`     | 历史会话、消息记录和会话重开                         |
+| `/admin/handoff`      | 待处理人工会话，处理完成后恢复自动答                 |
+| `/admin/proactive`    | 主动补位记录与结果                                   |
+| `/admin/kb`           | 知识文档管理、编辑和向量摄入                         |
+| `/admin/reflection`   | 反思条目、整理进度和知识升格                         |
+| `/admin/ranking`      | 高频问题排行，帮助团队发现产品与文档缺口             |
+| `/admin/config`       | QQ、Telegram、回复体验、会话、反思、通知和存储路径查看（DB_PATH 只读） |
+| `/admin/groups`       | 生效会话、活动量和会话级策略覆盖                     |
+| `/admin/capabilities` | 当前 Agent 的插件、Skill、MCP 与工具能力             |
+| `/admin/plugins`      | 插件安装、更新、启停和重载                           |
 
 <p align="center">
-  <img src="docs/assets/qiyuan-operations.svg" alt="Prayer 管理后台能力图" width="100%" />
+  <img src="docs/assets/prayer-operations.svg" alt="Prayer 管理后台能力图" width="100%" />
 </p>
 
-建议在生产环境设置 `ADMIN_TOKEN`，为管理后台和 `/api` 开启口令保护。
+开发环境可省略 `ADMIN_TOKEN`；生产环境必须设置，否则管理后台和 `/api` 会 fail-closed。
 
 ## 技术底座
 
-Prayer 以单个 Node.js 进程运行 Next.js 管理后台和客服 Agent。`instrumentation.ts` 在 Node runtime 启动时装配运行时，因此启动一个生产服务进程即可同时获得：
+Prayer 以单个 Node.js 进程运行 Next.js 管理后台和客服 Agent。`instrumentation.ts` 仅在 Node runtime 启动时加载数据库、配置和 `lib/runtime.ts`，由组合根装配通道、会话编排、知识循环与模型能力；因此启动一个生产服务进程即可同时获得：
 
 - QQ / Telegram 通道连接与消息分发
 - Agent 会话编排、知识检索、工具调用与人工接管
@@ -164,7 +185,11 @@ cp .env.example .env
 pnpm ingest
 ```
 
-摄入过程会生成本地 embedding 并写入 sqlite-vec。`docs/kb/` 默认不纳入版本控制，生产环境建议使用受控目录、挂载卷或通过管理后台维护。
+摄入过程会生成本地 embedding 并写入生产 SQLite 的 sqlite-vec 索引；执行前后可用只读
+`pnpm kb:freshness` 核对文件、分块和向量维度，报告失败时应先取得授权再做受控重建。
+生产重建前请暂停 PM2/后台写入任务，避免 CLI 与运行中的进程并发修改索引。
+`docs/kb/_archive/` 中的可见 Markdown/TXT 不会进入生产入库。`docs/kb/` 默认不纳入版本
+控制，生产环境建议使用受控目录、挂载卷或通过管理后台维护。
 
 ### 4. 构建并启动
 
@@ -201,28 +226,35 @@ Telegram chat id 必须按字符串保存，尤其是超级群的负数 id，不
 
 环境变量用于首次启动时提供种子值；保存后的业务配置持久化在 SQLite 中，并可在管理后台修改。模型凭证始终由 `settings.json` 管理。
 
+`DB_PATH` 是部署级存储边界，管理后台中的存储路径只读；迁移数据库时请停机、备份并在部署环境修改 `DB_PATH`，再按[数据库迁移与备份](docs/database-operations.md)验证，不支持在线搬库。
+通常应填写普通文件路径；也接受不带 query/fragment 的本机绝对 `file:` URI。SQLite URI
+选项和远程/相对 `file:` URI 会被拒绝，避免把只读等 URI 语义静默改成普通文件打开。
+
 常用环境变量：
 
-| 变量 | 作用 |
-| --- | --- |
-| `BRAND_NAME` | 首次启动时的品牌名称，默认 `Prayer` |
-| `BRAND_DESCRIPTION` | 首次启动时的品牌/业务简介 |
-| `CLAUDE_CONFIG_DIR` | Agent SDK 配置目录，默认 `./data/claude-config` |
-| `DB_PATH` | SQLite 数据库路径，默认 `./data/agent.db` |
-| `ONEBOT_WS_URL` | QQ / OneBot 正向 WebSocket 地址 |
-| `ONEBOT_ACCESS_TOKEN` | OneBot 鉴权 token，可选 |
-| `BOT_QQ` | QQ 机器人账号 |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot token |
-| `TELEGRAM_ENABLED_CHATS` | 首次启动时种子的 Telegram chat id 列表，逗号或空格分隔 |
-| `ADMIN_GROUP_ID` | 首次启动时种子的 QQ 管理面 |
-| `ADMIN_TOKEN` | 管理后台和 API 的访问口令，可选但建议生产开启 |
-| `HANDOFF_TIMEOUT_MIN` | 转人工超时后恢复自动答的分钟数 |
-| `RESUME_TTL_MS` | 会话续接空闲时间，设为 `0` 关闭过期 |
-| `KB_PREFETCH_ENABLED` | 是否在每轮消息前自动预检索，默认开启 |
-| `PROACTIVE_ENABLED` | 是否开启无人应答主动补位，默认关闭 |
-| `SUPPORT_URL` | 无法处理业务时展示的支持链接 |
-| `MAX_REPLY_CHARS` | 单条回复拆分上限，`0` 表示不拆分 |
-| `USAGE_BUDGET_USD` | 日用量预算，`0` 表示不告警 |
+| 变量                     | 作用                                                                     |
+| ------------------------ | ------------------------------------------------------------------------ |
+| `BRAND_NAME`             | 首次启动时的品牌名称，默认 `Prayer`                                      |
+| `BRAND_DESCRIPTION`      | 首次启动时的品牌/业务简介                                                |
+| `CLAUDE_CONFIG_DIR`      | Agent SDK 配置目录，默认 `./data/claude-config`                          |
+| `DB_PATH`                | SQLite 数据库路径，默认 `./data/agent.db`                                |
+| `ONEBOT_WS_URL`          | QQ / OneBot 正向 WebSocket 地址                                          |
+| `ONEBOT_ACCESS_TOKEN`    | OneBot 鉴权 token，可选                                                  |
+| `BOT_QQ`                 | QQ 机器人账号                                                            |
+| `TELEGRAM_BOT_TOKEN`     | Telegram Bot token                                                       |
+| `TELEGRAM_ENABLED_CHATS` | 首次启动时种子的 Telegram chat id 列表，逗号或空格分隔                   |
+| `ADMIN_GROUP_ID`         | 首次启动时种子的 QQ 管理面                                               |
+| `ADMIN_TOKEN`            | 管理后台和 API 的访问口令；开发可省略，生产必填（缺失时 fail-closed）    |
+| `PRAYER_MCP_ALLOWLIST`   | 额外显式放行的完整 MCP 工具名（逗号/空格分隔）；默认仅 CS/Packy 查询工具 |
+| `TRUST_PROXY`            | 仅可信反向代理已规范化 `X-Forwarded-For`、`X-Forwarded-Host`、`X-Forwarded-Proto` 时设为 `true`，用于登录限速和 Cookie 请求的 Origin 校验 |
+| `PRAYER_BACKUP_PATHS`    | 供权限审计检查的显式备份文件路径，不会递归扫描                           |
+| `HANDOFF_TIMEOUT_MIN`    | 转人工超时后恢复自动答的分钟数                                           |
+| `RESUME_TTL_MS`          | 会话续接空闲时间，设为 `0` 关闭过期                                      |
+| `KB_PREFETCH_ENABLED`    | 是否在每轮消息前自动预检索，默认开启                                     |
+| `PROACTIVE_ENABLED`      | 是否开启无人应答主动补位，默认关闭                                       |
+| `SUPPORT_URL`            | 无法处理业务时展示的支持链接                                             |
+| `MAX_REPLY_CHARS`        | 单条回复拆分上限，`0` 表示不拆分                                         |
+| `USAGE_BUDGET_USD`       | 日用量预算，`0` 表示不告警                                               |
 
 反思、整理、知识升格、主动补位和主题排行的完整参数见 [`.env.example`](.env.example)，也可以在 `/admin/config` 中调整。
 
@@ -242,7 +274,7 @@ pnpm pm:delete    # 从 PM2 移除
 ```
 
 <p align="center">
-  <img src="docs/assets/qiyuan-deployment.svg" alt="Prayer 生产部署拓扑" width="100%" />
+  <img src="docs/assets/prayer-deployment.svg" alt="Prayer 生产部署拓扑" width="100%" />
 </p>
 
 Linux 上可使用 systemd 配置开机自启：
@@ -257,8 +289,15 @@ pnpm pm:disable
 - 必须使用标准 Node.js server runtime，不支持 Vercel、Edge Function 或其他 serverless 运行方式。
 - PM2 必须保持 `instances: 1` 和 `fork` 模式：better-sqlite3 是 native 依赖，通道包含长连接 / long polling。
 - Telegram 同一 Bot token 不支持多实例消费。
-- 发布前应备份 SQLite 数据库；可使用 `pnpm db:check` 和 `pnpm db:backup`。
-- 外部访问管理后台时，建议同时配置 `ADMIN_TOKEN`、HTTPS、反向代理访问控制和最小化开放端口。
+- 发布前应备份 SQLite 数据库；可使用 `pnpm db:check` 和 `pnpm db:backup`。备份命令是
+  一次性的本机原子备份，目标文件不得已存在；仓库不替部署方提供自动 cron、异地复制或
+  恢复演练。
+- 外部访问管理后台时，生产必须配置 `ADMIN_TOKEN`，并同时启用 HTTPS、反向代理访问控制和最小化开放端口。
+- `/health/live` 只表示进程存活；`/health/ready` 会在必需通道未连接或启动失败时返回 `503`，可直接接入负载均衡健康检查。
+- 生产环境请将 `.env`、`settings.json`、SQLite 数据库/WAL/备份限制为 `0600`（仅进程用户
+  可读），并在部署前轮换凭据；`pnpm security:permissions` 默认只读审计，只有显式
+  `--apply` 才会修改已列出的普通文件，应用不会替你修改现有主机权限。
+- 插件管理 CLI 只继承定位 CLI、配置和临时目录所需的安全环境白名单；插件仍属于第三方代码，Claude 配置中的 hooks / `env` 可能继续向其注入权限，因此公开的不受信任插件仍需独立低权限隔离。
 
 ## 开发与验证
 
@@ -268,6 +307,9 @@ pnpm typecheck    # TypeScript 检查
 pnpm lint         # ESLint
 pnpm test         # Vitest
 pnpm check        # typecheck + lint + test
+pnpm kb:freshness # 只读核对 docs/kb 与 SQLite 分块/向量是否一致
+pnpm security:permissions # 只读审计；确认后用 `pnpm security:permissions -- --apply` 收紧到 600
+pnpm db:retention # 默认只读预览；确认备份后用 `--apply` 清理过期数据
 ```
 
 涉及页面、路由或生产边界时，使用独立构建目录，避免覆盖正在运行的 `.next`：
@@ -287,16 +329,19 @@ NEXT_DIST_DIR=.next-verify pnpm build
 ```text
 app/                    管理后台页面与 API 路由
 components/             管理后台与通用 UI 组件
-lib/agent/              Agent、会话编排、人工接管与后台循环
-lib/channels/           QQ / Telegram 通道抽象与适配器
-lib/db/                 SQLite 数据访问、迁移与领域仓储
-lib/plugins/            插件生命周期管理
-plugins/                本地插件、Skill 与 MCP server
+lib/core/               L0 共享地基：db、config、chat 词汇、日志、总线与展示纯函数
+lib/model/              L1 模型基座：SDK、embedding、工具策略、prompt 与用量
+lib/channels/           L2 QQ / Telegram 通道实现、registry 与生命周期
+lib/knowledge/          L2 知识库与反思：检索、压缩、升格
+lib/conversation/       L3 会话与编排：Agent、网关、缓冲区、人工接管与后台循环
+lib/runtime.ts          L4 组合根：装配全部运行时能力
+plugins/                本地业务插件、Skill 与 MCP server
 scripts/                知识库摄入、数据库维护脚本
 docs/kb/                业务知识源文件（默认不入 Git）
 docs/assets/            README 与产品文档视觉素材
 data/                   运行时数据库与 SDK 配置（默认不入 Git）
 logs/                   PM2 与运行日志（默认不入 Git）
+tests/architecture/     分层与旧路径退役护栏
 ```
 
 ## 当前边界

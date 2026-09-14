@@ -1,7 +1,7 @@
 import type { Message } from "grammy/types"
-import type { ImageInput, IncomingMessage } from "../../events"
-import { errorMessage } from "../../log-context"
-import { logger } from "../../logger"
+import type { ImageInput, IncomingMessage } from "../../core/chat/events"
+import { errorMessage } from "../../core/log-context"
+import { logger } from "../../core/logger"
 import type { SenderRole } from "./admins-cache"
 import {
   downloadTelegramImage,
@@ -78,14 +78,11 @@ export async function enrichTelegramMessage(
         const img = await deps.downloadImage(fid)
         if (img) images.push(img)
       } catch (err) {
-        logger.warn(
-          `[tg-enrich] 跳过下载失败图片 ${fid}: ${errorMessage(err)}`,
-          {
-            scope: "tg.enrich",
-            chatId: msg.chatId,
-            raw: msg.messageId,
-          }
-        )
+        logger.warn(`[tg-enrich] 跳过下载失败图片: ${errorMessage(err)}`, {
+          scope: "tg.enrich",
+          chatId: msg.chatId,
+          raw: msg.messageId,
+        })
       }
     }
   }

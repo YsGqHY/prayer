@@ -1,7 +1,7 @@
 import { WebSocketServer } from "ws"
 import type { IncomingMessage as HttpRequest } from "node:http"
-import { logger } from "../../logger"
-import { timingSafeEqualStr } from "../../auth"
+import { logger } from "../../core/logger"
+import { timingSafeEqualStr } from "../../core/auth"
 import { MiraiWsPeer, type MiraiPeerOpts } from "./peer"
 import { MAX_FRAME_BYTES } from "./protocol"
 

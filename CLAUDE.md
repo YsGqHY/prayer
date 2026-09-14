@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 生产：`pnpm build && pnpm start`（或 `pnpm pm:start` 走 pm2）
 - 类型检查：`pnpm typecheck`（`tsc --noEmit`）
 - Lint：`pnpm lint` / 格式化：`pnpm format`
-- 测试全部：`pnpm test`；单个：`pnpm vitest run tests/lib/agent/session.test.ts` 或按名 `pnpm vitest run -t "名字"`
+- 测试全部：`pnpm test`；单个：`pnpm vitest run tests/lib/conversation/session.test.ts` 或按名 `pnpm vitest run -t "名字"`
 - 知识库入库：`pnpm ingest`（读 `docs/kb/**` → 本地嵌入 → sqlite-vec,幂等）
 - 三件套一键：`pnpm check`（= typecheck + lint + test）
 
@@ -37,10 +37,11 @@ GitHub Actions 在 PR 与 main 推送时运行 `pnpm check` 和生产构建。�
 
 ## 仓库结构
 
-`app/`（App Router:`/admin/*` 页面 + `/api/*` 路由）、`lib/`（核心:`agent/` agent+编排+反思循环、`db/` better-sqlite3、`onebot/` WS 客户端、`tools/` 嵌入+KB、`plugins/`）、`plugins/`（`cs`/`packyapi` 本地 MCP server）、`scripts/`（ingest）、`docs/kb/`（知识库源,gitignore）、`data/`+`logs/`（gitignore)。
+`app/`（App Router:`/admin/*` 页面 + `/api/*` 路由）、`lib/`（五层:`core/` 无依赖的纯工具与地基（SQLite 数据访问与迁移、配置、日志、事件总线、通道词汇、UI 展示纯函数）、`channels/` 通道（QQ/TG）、`model/` 模型基座（SDK 环境与 query options、工具白名单、prompt 构造与 system prompt、drain、嵌入、JSON 输出、超时、用量计量）、`knowledge/` 知识库与反思、`conversation/` 会话与编排（Agent、网关、缓冲区、人工接管、后台循环）、以及组合根 `runtime.ts`）、`plugins/`（`cs`/`packyapi` 本地 MCP server）、`scripts/`（ingest）、`docs/kb/`（知识库源,gitignore）、`data/`+`logs/`（gitignore)。
 
 ## Git 约定
 
 - 提交用 Conventional Commits(`feat/fix(scope): …`)+ 中文正文,与现有 git log 一致。
 - 功能分支开发(`feat/*`),不直接提交 main。
+- 纯结构性重构用 `refactor/*` 前缀（目录重组、文件搬迁、切分等不改变行为的改动）。
 - 改 agent 核心 / db schema / 后台反思循环前,先出方案再动手。
