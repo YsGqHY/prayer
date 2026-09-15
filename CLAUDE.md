@@ -32,16 +32,27 @@ GitHub Actions 在 PR 与 main 推送时运行 `pnpm check` 和生产构建。�
 - **Prettier:无分号 + 双引号**（`semi:false`, `singleQuote:false`, `trailingComma:es5`, printWidth 80）。不匹配 `pnpm format` 会全量重写。
 - **测试放 `tests/`（镜像 `lib/` 结构),不与源码同目录** —— `include` 只认 `tests/**/*.test.ts`。
 - native 依赖（`better-sqlite3`、`sqlite-vec`、`@huggingface/transformers`）在 `next.config.ts` 的 `serverExternalPackages`,别打包。嵌入用本地 `Xenova/bge-small-zh-v1.5`。
-- **知识库按 namespace 分区**（`kb_chunks.namespace`,DB v9）:一个会话只读写一份知识库。解析只走 `resolveKbNamespace`（`lib/channels/enabled-chats.ts`),路径→分区只走 `namespaceOfRel`（`lib/kb-path.ts`）,不要在调用点自行拼装。写入方法（`insertKbEntry`/`insertKbChunk`）的 namespace 必传且无默认值 —— 漏传应编译报错,不能静默落进 `default`。**分区绝不能由模型声明**（工具参数/prompt 都不行）,只能服务端经 `KB_NAMESPACE` env 注入给 MCP 子进程。详见 `docs/architecture.md` 第 9 节。
+- **知识库按 namespace 分区**（`kb_chunks.namespace`,DB v10）:一个会话只读写一份知识库。解析只走 `resolveKbNamespace`（`lib/core/chat/enabled-chats.ts`),路径→分区只走 `namespaceOfRel`（`lib/knowledge/kb-path.ts`）,不要在调用点自行拼装。写入方法（`insertKbEntry`/`insertKbChunk`）的 namespace 必传且无默认值 —— 漏传应编译报错,不能静默落进 `default`。**分区绝不能由模型声明**（工具参数/prompt 都不行）,只能服务端经 `KB_NAMESPACE` env 注入给 MCP 子进程。详见 `docs/architecture.md` 第 9 节。
 - Next.js 16 与你熟悉的不同,写前先读 `node_modules/next/dist/docs/`（见 AGENTS.md）。
 
 ## 仓库结构
 
-`app/`（App Router:`/admin/*` 页面 + `/api/*` 路由）、`lib/`（五层:`core/` 无依赖的纯工具与地基（SQLite 数据访问与迁移、配置、日志、事件总线、通道词汇、UI 展示纯函数）、`channels/` 通道（QQ/TG）、`model/` 模型基座（SDK 环境与 query options、工具白名单、prompt 构造与 system prompt、drain、嵌入、JSON 输出、超时、用量计量）、`knowledge/` 知识库与反思、`conversation/` 会话与编排（Agent、网关、缓冲区、人工接管、后台循环）、以及组合根 `runtime.ts`）、`plugins/`（`cs`/`packyapi` 本地 MCP server）、`scripts/`（ingest）、`docs/kb/`（知识库源,gitignore）、`data/`+`logs/`（gitignore)。
+`app/`（App Router:`/admin/*` 页面 + `/api/*` 路由）、`lib/`（五层:`core/` 无依赖的纯工具与地基（SQLite 数据访问与迁移、配置、日志、事件总线、通道词汇、UI 展示纯函数）、`channels/` 通道（QQ/TG/mirai）、`model/` 模型基座（SDK 环境与 query options、工具白名单、prompt 构造与 system prompt、drain、嵌入、JSON 输出、超时、用量计量）、`knowledge/` 知识库与反思、`conversation/` 会话与编排（Agent、网关、缓冲区、人工接管、后台循环）、以及组合根 `runtime.ts`）、`plugins/`（`cs`/`packyapi` 本地 MCP server）、`scripts/`（ingest）、`docs/kb/`（知识库源,gitignore）、`data/`+`logs/`（gitignore)。
 
 ## Git 约定
 
+- **远程分工:`origin` = 个人 fork（`YsGqHY/prayer`,推送目标）,`upstream` = 原仓库（`BingZi-233/prayer`,只读同步源）。** 个人提交一律推 fork,**绝不推 `upstream`**。`main` 已跟踪 `origin/main`,裸 `git push` / `git pull` 默认走 fork。
+- **提交前先 sync 上游,再推 fork**:
+
+  ```bash
+  git fetch upstream          # 取原仓库最新
+  git merge upstream/main     # 合入本地
+  pnpm check                  # 合并后必须重新验证
+  git push                    # 默认推到 fork(origin)
+  ```
+
+  上游做过整目录重构（`lib/agent/*` 拆入 `lib/model`/`lib/knowledge`/`lib/conversation`,基础设施迁入 `lib/core`）,sync 时容易撞出成批 **modify/delete 冲突**（本地改了旧路径、上游把文件移走了）。这类冲突**不能简单取一边**:必须把本地增量搬到上游的新路径上、再删旧文件,否则会静默丢功能。同理,上游可能占用与本地相同的 DB 迁移版本号,撞号时本地迁移顺延到下一个未占用版本。
 - 提交用 Conventional Commits(`feat/fix(scope): …`)+ 中文正文,与现有 git log 一致。
-- 功能分支开发(`feat/*`),不直接提交 main。
+- 功能分支开发(`feat/*`)。向 `upstream` 提 PR 时必须走功能分支;fork 自己的 `main` 可直接提交(sync 上游后的合并提交就落在这里)。
 - 纯结构性重构用 `refactor/*` 前缀（目录重组、文件搬迁、切分等不改变行为的改动）。
 - 改 agent 核心 / db schema / 后台反思循环前,先出方案再动手。

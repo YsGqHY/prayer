@@ -138,7 +138,7 @@ buffer 刻意不过滤 @bot 的消息，因为反思与主题归类需要全量�
 
 ## 6. Agent 调用机制
 
-`lib/agent/agent.ts` 封装 SDK 调用，是全项目最需要小心改动的文件。
+`lib/conversation/agent.ts` 封装 SDK 调用，是全项目最需要小心改动的文件。
 
 ### 6.1 进程与凭据
 
@@ -256,7 +256,7 @@ group_messages
 
 ### 8.1 迁移机制
 
-版本号存在 `PRAGMA user_version`，迁移注册表按严格递增顺序声明（当前到 v9：通道化标识、会话纪元与时间窗索引、机器人提及标记、工具统计、查询索引与主题唯一化、入站消息清理索引、热点读取索引、知识库 namespace 分区）。
+版本号存在 `PRAGMA user_version`，迁移注册表按严格递增顺序声明（当前到 v10：通道化标识、会话纪元与时间窗索引、机器人提及标记、工具统计、查询索引与主题唯一化、入站消息清理索引、热点读取索引、可靠出站与投递状态、知识库 namespace 分区）。
 
 runner 的保护：每个版本迁移与版本号写入同处一个事务，某步失败则之前版本保留、失败版本不留半成品；版本高于程序支持范围则拒绝打开（不允许旧程序开新库）；不支持降级；步骤必须连续。已升级的库重开时会执行各步的 `repair`，补齐早期版本遗留的缺失结构。
 
@@ -277,7 +277,7 @@ runner 的保护：每个版本迁移与版本号写入同处一个事务，某�
 | `config` | 配置单行 JSON + 各类游标 |
 | `name_cache_*` | 群名、用户名、成员列表缓存 |
 
-数据访问经 `lib/db/repo.ts` 聚合的领域仓储（config / knowledge / messages / proactive / reflection / sessions / statistics / tickets / topics）。
+数据访问经 `lib/core/db/repo.ts` 聚合的领域仓储（config / knowledge / messages / proactive / reflection / sessions / statistics / tickets / topics）。
 
 ### 8.3 检索
 
@@ -287,7 +287,7 @@ runner 的保护：每个版本迁移与版本号写入同处一个事务，某�
 
 ### 8.4 入库
 
-`pnpm ingest` 读 `docs/kb/**`，按空行分段、单段上限 500 字切块，逐块 embed 后写入，按 (namespace, doc) 幂等替换。分区取一级子目录名，根目录散文件归 `default`（规则在 `lib/kb-path.ts` 的 `namespaceOfRel`，ingest 与 kb API 共用）。
+`pnpm ingest` 读 `docs/kb/**`，按空行分段、单段上限 500 字切块，逐块 embed 后写入，按 (namespace, doc) 幂等替换。分区取一级子目录名，根目录散文件归 `default`（规则在 `lib/knowledge/kb-path.ts` 的 `namespaceOfRel`，ingest 与 kb API 共用）。
 
 prune 按 (namespace, doc) 联合判定，不能只看 doc 名——不同分区允许同名文件，只看 doc 会误删。`human-reflection` 这类只存在于 DB、磁盘无对应文件的 doc 在 prune 时受保护。CLI 与 `POST /api/kb/ingest` 通过 `globalThis` 上的进程级互斥锁串行化，防止并发时两个循环对同一 doc 交错 delete/insert 混入双方 chunk。
 
@@ -297,7 +297,7 @@ prune 按 (namespace, doc) 联合判定，不能只看 doc 名——不同分区
 
 ### 9.1 映射与解析
 
-映射落在 `groupPolicies.<channel:chatId>.kbNamespace`，复用既有的 per-chat 策略位置，不新建映射表。解析统一走 `lib/channels/enabled-chats.ts` 的 `resolveKbNamespace`，全项目唯一入口，禁止各调用点自行拼装；它内部复用 `getGroupPolicy`，因此连带获得 QQ 裸群号 legacy 键兼容。
+映射落在 `groupPolicies.<channel:chatId>.kbNamespace`，复用既有的 per-chat 策略位置，不新建映射表。解析统一走 `lib/core/chat/enabled-chats.ts` 的 `resolveKbNamespace`，全项目唯一入口，禁止各调用点自行拼装；它内部复用 `getGroupPolicy`，因此连带获得 QQ 裸群号 legacy 键兼容。
 
 未配置回落 `DEFAULT_KB_NAMESPACE`（`"default"`）。这是存量兼容所必需的，但多租户下漏配等于读到 default 分区（含存量语料），是本功能唯一的跨租户泄漏面。因此 `chatsMissingKbNamespace` 列出「已生效但未配」的会话，后台在 `/admin/groups` 的指标区、表格列与策略弹窗三处显式告警，而不是让默认值静默生效。管理面不参与告警，它不进客服流程也不检索知识库。
 
@@ -347,7 +347,7 @@ prune 按 (namespace, doc) 联合判定，不能只看 doc 名——不同分区
 
 业务能力不写进客服主流程，而是通过 Claude Code 插件接入。加载路径唯一：`CLAUDE_CONFIG_DIR/settings.json` 的 `enabledPlugins`（配合 `settingSources: ["user"]`），代码不显式传 `pluginPaths`，避免双加载冲突。
 
-`plugins/cs` 提供知识库检索：一个 stdio MCP server 暴露单工具 `kb_search`，以及一个 Skill 提供使用说明。它以只读方式打开同一个 WAL 库（`DB_PATH` 由父进程绝对化后继承），不建表不迁移。子进程由 Node 原生 strip-only 运行 TypeScript，因此不能 import `lib/db/repo.ts`（TS 参数属性不被支持），只复用 `lib/tools/embed.ts` 与 `lib/tools/kb.ts`。
+`plugins/cs` 提供知识库检索：一个 stdio MCP server 暴露单工具 `kb_search`，以及一个 Skill 提供使用说明。它以只读方式打开同一个 WAL 库（`DB_PATH` 由父进程绝对化后继承），不建表不迁移。子进程由 Node 原生 strip-only 运行 TypeScript，因此不能 import `lib/core/db/repo.ts`（TS 参数属性不被支持），只复用 `lib/model/embed.ts` 与 `lib/knowledge/kb.ts`。
 
 `plugins/packyapi` 是可选业务插件示例（实时价格等）。启用它能查 PackyAPI 实时数据，停用或替换不影响平台身份。
 
@@ -355,7 +355,7 @@ prune 按 (namespace, doc) 联合判定，不能只看 doc 名——不同分区
 
 ## 12. 配置机制
 
-`lib/config/schema.ts` 的 zod schema 是配置字段、默认值与类型的唯一来源，不引入数据库或运行时依赖。整份配置以单行 JSON 存在 `config` 表的 `app` 键。
+`lib/core/config/schema.ts` 的 zod schema 是配置字段、默认值与类型的唯一来源，不引入数据库或运行时依赖。整份配置以单行 JSON 存在 `config` 表的 `app` 键。
 
 读取流程（`getConfig`）：先从环境变量算出种子，DB 无值 / JSON 非法 / 不是对象时写入种子并返回；否则跑形状迁移，迁移过就写回。写入（`setConfig`）会过滤 `undefined`（未修改不等于重置为默认值）并规范化白名单与管理面等 SOT 字段。
 
